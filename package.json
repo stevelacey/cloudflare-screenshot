@@ -1,0 +1,14 @@
+{
+  "name": "cloudflare-screenshot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev"
+  },
+  "devDependencies": {
+    "@cloudflare/puppeteer": "^0.0.6",
+    "wrangler": "^3.0.0"
+  }
+}
