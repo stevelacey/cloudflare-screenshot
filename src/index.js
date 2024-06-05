@@ -14,7 +14,7 @@ export default {
 }
 
 const pattern = regexMerge(
-  /^(?<base>https:\/\/[\w\.]+)\/screenshot/,
+  /^(?<base>https:\/\/[\w\.\/]+)\/screenshot/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
