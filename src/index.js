@@ -42,13 +42,20 @@ export class Browser {
   async fetch(request) {
     const settings = request.url.match(pattern).groups
 
-    const { base, path, width, height, maxage, query, scale } = {
+    const { base, path, width, height, maxage, scale } = {
       ...defaults,
       ...settings,
       width: parseInt(settings.width ?? defaults.width),
       height: parseInt(settings.height ?? defaults.height),
       scale: parseInt(settings.scale ?? defaults.scale),
     }
+
+    const params = [
+      ...settings.query ? settings.query.trim('?').split('&') : [],
+      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.trim('?').split('&') : [],
+    ]
+
+    const query = params ? `?${params.join('&')}` : null
 
     const url = [base, path, query].filter(x => x).join('')
 
