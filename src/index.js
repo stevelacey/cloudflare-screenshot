@@ -59,8 +59,8 @@ export class Browser {
     }
 
     const params = [
-      ...settings.query ? settings.query.trim('?').split('&') : [],
-      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.trim('?').split('&') : [],
+      ...settings.query ? settings.query.replace(/^\?/, '').split('&') : [],
+      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, '').split('&') : [],
     ]
 
     const query = params ? `?${params.join('&')}` : null
