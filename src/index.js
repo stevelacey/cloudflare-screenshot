@@ -2,19 +2,27 @@ import puppeteer from '@cloudflare/puppeteer'
 import { regexMerge } from "./support"
 
 export default {
-  async fetch(request, env) {
-    const id = env.BROWSER.idFromName("browser")
-    const obj = env.BROWSER.get(id)
+  async fetch(request, env, ctx) {
+    const cache = caches.default
 
-    // Send a request to the Durable Object, then await its response
-    const response = await obj.fetch(request.url)
+    const screenshot = await cache.match(request.url)
+
+    if (screenshot) {
+      return screenshot
+    }
+
+    const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
+
+    const response = await browser.fetch(request.url)
+
+    ctx.waitUntil(cache.put(request.url, response.clone()))
 
     return response
   }
 }
 
 const pattern = regexMerge(
-  /^(?<base>https:\/\/[\w\.\/]+)\/screenshot/,
+  /^(?<base>https:\/\/[\w\.\/]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
