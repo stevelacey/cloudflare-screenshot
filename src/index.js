@@ -89,12 +89,6 @@ export class Browser {
 
     const screenshot = await page.screenshot({ clip: { width, height, x: 0, y: 0 }})
 
-    // const fileName = "screenshot_" + width[i] + "x" + height[i]
-
-    // const sc = await page.screenshot({ path: fileName + ".jpg" })
-
-    // await this.env.BUCKET.put(folder + "/"+ fileName + ".jpg", sc)
-
     await page.close()
 
     // Reset keptAlive after performing tasks to the DO
