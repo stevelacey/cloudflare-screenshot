@@ -1,4 +1,4 @@
-import puppeteer from '@cloudflare/puppeteer'
+import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
 
 export default {
@@ -26,11 +26,12 @@ const pattern = regexMerge(
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
-  /(?:\.png)?/,
+  /(?:\.(?<format>(pdf|png)))?/,
   /(?<query>\?.*)?$/,
 )
 
 const defaults = {
+  format: "png",
   width: 1200,
   height: 630,
   maxage: 60 * 60 * 24 * 7,
@@ -50,24 +51,25 @@ export class Browser {
   async fetch(request) {
     const settings = request.url.match(pattern).groups
 
-    const { base, path, width, height, maxage, scale } = {
+    const { base, format, path, width, height, maxage, scale } = {
       ...defaults,
       ...settings,
+      format: settings.format ?? defaults.format,
       width: parseInt(settings.width ?? defaults.width),
       height: parseInt(settings.height ?? defaults.height),
       scale: parseInt(settings.scale ?? defaults.scale),
     }
 
     const params = [
-      ...settings.query ? settings.query.replace(/^\?/, '').split('&') : [],
-      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, '').split('&') : [],
+      ...settings.query ? settings.query.replace(/^\?/, "").split("&") : [],
+      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, "").split("&") : [],
     ]
 
-    const query = params ? `?${params.join('&')}` : null
+    const query = params ? `?${params.join("&")}` : null
 
-    const url = [base, path, query].filter(x => x).join('')
+    const url = [base, path, query].filter(x => x).join("")
 
-    // if there's a browser session open, re-use it
+    // if there"s a browser session open, re-use it
     if (!this.browser || !this.browser.isConnected()) {
       console.log(`Browser DO: Starting new instance`)
 
@@ -87,7 +89,12 @@ export class Browser {
 
     await page.goto(url, { waitUntil: "networkidle0" })
 
-    const screenshot = await page.screenshot({ clip: { width, height, x: 0, y: 0 }})
+    const screenshot = await (format === "pdf" ? page.pdf({
+      format: "A4",
+      margin: { top: 20, right: 40, bottom: 20, left: 40 },
+    }) : page.screenshot({
+      clip: { width, height, x: 0, y: 0 },
+    }))
 
     await page.close()
 
@@ -106,7 +113,7 @@ export class Browser {
     return new Response(screenshot, {
       headers: {
         "Cache-Control": `public, max-age=${maxage}`,
-        "Content-Type": "image/png",
+        "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
         "Expires": new Date(Date.now() + maxage * 1000).toUTCString(),
       },
     })
