@@ -83,7 +83,9 @@ export class Browser {
     // Reset keptAlive after each call to the DO
     this.keptAliveInSeconds = 0
 
-    const page = await this.browser.newPage()
+    const context = await this.browser.createIncognitoBrowserContext()
+
+    const page = await context.newPage()
 
     await page.setViewport({ width, height, deviceScaleFactor: scale })
 
@@ -97,6 +99,8 @@ export class Browser {
     }))
 
     await page.close()
+
+    await context.close()
 
     // Reset keptAlive after performing tasks to the DO
     this.keptAliveInSeconds = 0
