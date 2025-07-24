@@ -87,6 +87,13 @@ export class Browser {
 
     const page = await context.newPage()
 
+    if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
+      await page.setExtraHTTPHeaders({
+        "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
+        "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+      })
+    }
+
     await page.setViewport({ width, height, deviceScaleFactor: scale })
 
     await page.goto(url, { waitUntil: "networkidle0" })
