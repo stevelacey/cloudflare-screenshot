@@ -32,8 +32,8 @@ const pattern = regexMerge(
 
 const defaults = {
   format: "png",
-  width: 1200,
-  height: 630,
+  width: 1280,
+  height: 720,
   maxage: 60 * 60 * 24 * 7,
   scale: 1,
 }
