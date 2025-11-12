@@ -69,14 +69,44 @@ export class Browser {
 
     const url = [base, path, query].filter(x => x).join("")
 
-    // if there"s a browser session open, re-use it
-    if (!this.browser || !this.browser.isConnected()) {
-      console.log(`Browser DO: Starting new instance`)
-
+    // Check if we need to launch a new browser
+    if (!this.browser) {
       try {
         this.browser = await puppeteer.launch(this.env.MYBROWSER)
       } catch (e) {
-        console.log(`Browser DO: Could not start browser instance. Error: ${e}`)
+        const isRateLimit = e.message?.includes("429") || e.message?.includes("Rate limit")
+        return new Response(
+          isRateLimit
+            ? "Browser Rendering API rate limit exceeded. Please try again later."
+            : `Failed to launch browser: ${e.message}`,
+          {
+            status: isRateLimit ? 429 : 500,
+            headers: { "Content-Type": "text/plain" },
+          }
+        )
+      }
+    } else {
+      // Check if browser is still connected
+      try {
+        if (!this.browser.isConnected()) {
+          this.browser = await puppeteer.launch(this.env.MYBROWSER)
+        }
+      } catch (e) {
+        // Browser in bad state, try to launch a new one
+        try {
+          this.browser = await puppeteer.launch(this.env.MYBROWSER)
+        } catch (e2) {
+          const isRateLimit = e2.message?.includes("429") || e2.message?.includes("Rate limit")
+          return new Response(
+            isRateLimit
+              ? "Browser Rendering API rate limit exceeded. Please try again later."
+              : `Failed to launch browser: ${e2.message}`,
+            {
+              status: isRateLimit ? 429 : 500,
+              headers: { "Content-Type": "text/plain" },
+            }
+          )
+        }
       }
     }
 
@@ -109,17 +139,9 @@ export class Browser {
 
     await context.close()
 
-    // Reset keptAlive after performing tasks to the DO
+    // Reset keptAlive timer and reschedule alarm
     this.keptAliveInSeconds = 0
-
-    // Set the first alarm to keep DO alive
-    const currentAlarm = await this.storage.getAlarm()
-
-    if (currentAlarm == null) {
-      console.log(`Browser DO: setting alarm`)
-      const TEN_SECONDS = 10 * 1000
-      await this.storage.setAlarm(Date.now() + TEN_SECONDS)
-    }
+    await this.storage.setAlarm(Date.now() + 10 * 1000)
 
     return new Response(screenshot, {
       headers: {
@@ -133,18 +155,16 @@ export class Browser {
   async alarm() {
     this.keptAliveInSeconds += 10
 
-    // Extend browser DO life
     if (this.keptAliveInSeconds < KEEP_BROWSER_ALIVE_IN_SECONDS) {
-      console.log(`Browser DO: has been kept alive for ${this.keptAliveInSeconds} seconds. Extending lifespan.`)
       await this.storage.setAlarm(Date.now() + 10 * 1000)
-      // You could ensure the ws connection is kept alive by requesting something
-      // or just let it close automatically when there  is no work to be done
-      // for example, `await this.browser.version()`
     } else {
-      console.log(`Browser DO: exceeded life of ${KEEP_BROWSER_ALIVE_IN_SECONDS}s.`)
       if (this.browser) {
-        console.log(`Closing browser.`)
-        await this.browser.close()
+        try {
+          await this.browser.close()
+        } catch (e) {
+          // Ignore errors when closing
+        }
+        this.browser = null
       }
     }
   }
