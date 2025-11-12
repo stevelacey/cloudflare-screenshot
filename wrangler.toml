@@ -14,3 +14,17 @@ class_name = "Browser"
 [[migrations]]
 tag = "v1" # Should be unique for each entry
 new_classes = ["Browser"] # Array of new classes
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
