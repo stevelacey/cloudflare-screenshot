@@ -1,26 +1,6 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
 
-export default {
-  async fetch(request, env, ctx) {
-    const cache = caches.default
-
-    const screenshot = await cache.match(request.url)
-
-    if (screenshot) {
-      return screenshot
-    }
-
-    const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
-
-    const response = await browser.fetch(request.url)
-
-    ctx.waitUntil(cache.put(request.url, response.clone()))
-
-    return response
-  }
-}
-
 const pattern = regexMerge(
   /^(?<base>https:\/\/[\w\.\/]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
@@ -29,6 +9,44 @@ const pattern = regexMerge(
   /(?:\.(?<format>(pdf|png)))?/,
   /(?<query>\?.*)?$/,
 )
+
+export default {
+  async fetch(request, env, ctx) {
+    const match = request.url.match(pattern)
+    const { base, path, query, format } = match.groups
+
+    const hostname = new URL(base).hostname
+    const key = `${hostname}${path}${query || ""}`
+
+    // Check R2 bucket for existing screenshot
+    const existing = await env.SCREENSHOTS.get(key)
+
+    if (existing) {
+      const contentType = (format || "png") === "pdf" ? "application/pdf" : `image/${format || "png"}`
+
+      return new Response(existing.body, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=86400",
+        },
+      })
+    }
+
+    const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
+
+    const response = await browser.fetch(request.url)
+
+    if (response.ok) {
+      ctx.waitUntil(
+        response.clone().arrayBuffer().then(async (buffer) => {
+          await env.SCREENSHOTS.put(key, buffer)
+        })
+      )
+    }
+
+    return response
+  }
+}
 
 const defaults = {
   format: "png",
