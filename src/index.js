@@ -1,7 +1,14 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
 
-const pattern = regexMerge(
+const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
+const BROWSER_KEEP_ALIVE = 60
+const DEFAULT_FORMAT = "png"
+const DEFAULT_WIDTH = 1280
+const DEFAULT_HEIGHT = 720
+const DEFAULT_SCALE = 1
+const STORAGE_TTL = 7 * 24 * 60 * 60
+const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w\.\/]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?<path>\/.*?)/,
@@ -10,9 +17,36 @@ const pattern = regexMerge(
   /(?<query>\?.*)?$/,
 )
 
+async function fetchScreenshot(request, env, key, ctx) {
+  const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
+
+  const response = await browser.fetch(request.url)
+
+  if (response.ok) {
+    ctx.waitUntil(
+      response.clone().arrayBuffer().then(async (buffer) => {
+        await env.SCREENSHOTS.put(key, buffer)
+      })
+    )
+  }
+
+  return response
+}
+
+async function serveScreenshot(body, format) {
+  const contentType = (format || "png") === "pdf" ? "application/pdf" : `image/${format || "png"}`
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
+    },
+  })
+}
+
 export default {
   async fetch(request, env, ctx) {
-    const match = request.url.match(pattern)
+    const match = request.url.match(URL_PATTERN)
     const { base, path, query, format } = match.groups
 
     const hostname = new URL(base).hostname
@@ -22,41 +56,20 @@ export default {
     const existing = await env.SCREENSHOTS.get(key)
 
     if (existing) {
-      const contentType = (format || "png") === "pdf" ? "application/pdf" : `image/${format || "png"}`
+      const uploaded = existing.uploaded ? new Date(existing.uploaded).getTime() : null
 
-      return new Response(existing.body, {
-        headers: {
-          "Content-Type": contentType,
-          "Cache-Control": "public, max-age=86400",
-        },
-      })
+      // If stale, trigger background refresh for next visitor
+      if (uploaded && (Date.now() - uploaded > STORAGE_TTL * 1000)) {
+        fetchScreenshot(request, env, key, ctx)
+      }
+
+      return await serveScreenshot(existing.body, format)
     }
 
-    const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
-
-    const response = await browser.fetch(request.url)
-
-    if (response.ok) {
-      ctx.waitUntil(
-        response.clone().arrayBuffer().then(async (buffer) => {
-          await env.SCREENSHOTS.put(key, buffer)
-        })
-      )
-    }
-
-    return response
+    // No existing screenshot, generate a new one
+    return await fetchScreenshot(request, env, key, ctx)
   }
 }
-
-const defaults = {
-  format: "png",
-  width: 1280,
-  height: 720,
-  maxage: 60 * 60 * 24 * 7,
-  scale: 1,
-}
-
-const KEEP_BROWSER_ALIVE_IN_SECONDS = 60
 
 export class Browser {
   constructor(state, env) {
@@ -67,15 +80,14 @@ export class Browser {
   }
 
   async fetch(request) {
-    const settings = request.url.match(pattern).groups
+    const settings = request.url.match(URL_PATTERN).groups
 
-    const { base, format, path, width, height, maxage, scale } = {
-      ...defaults,
+    const { base, format, path, width, height, scale } = {
       ...settings,
-      format: settings.format ?? defaults.format,
-      width: parseInt(settings.width ?? defaults.width),
-      height: parseInt(settings.height ?? defaults.height),
-      scale: parseInt(settings.scale ?? defaults.scale),
+      format: settings.format ?? DEFAULT_FORMAT,
+      width: parseInt(settings.width ?? DEFAULT_WIDTH),
+      height: parseInt(settings.height ?? DEFAULT_HEIGHT),
+      scale: parseInt(settings.scale ?? DEFAULT_SCALE),
     }
 
     const params = [
@@ -87,48 +99,14 @@ export class Browser {
 
     const url = [base, path, query].filter(x => x).join("")
 
-    // Check if we need to launch a new browser
-    if (!this.browser) {
+    if (!this.browser || !this.browser.isConnected()) {
       try {
         this.browser = await puppeteer.launch(this.env.MYBROWSER)
       } catch (e) {
-        const isRateLimit = e.message?.includes("429") || e.message?.includes("Rate limit")
-        return new Response(
-          isRateLimit
-            ? "Browser Rendering API rate limit exceeded. Please try again later."
-            : `Failed to launch browser: ${e.message}`,
-          {
-            status: isRateLimit ? 429 : 500,
-            headers: { "Content-Type": "text/plain" },
-          }
-        )
-      }
-    } else {
-      // Check if browser is still connected
-      try {
-        if (!this.browser.isConnected()) {
-          this.browser = await puppeteer.launch(this.env.MYBROWSER)
-        }
-      } catch (e) {
-        // Browser in bad state, try to launch a new one
-        try {
-          this.browser = await puppeteer.launch(this.env.MYBROWSER)
-        } catch (e2) {
-          const isRateLimit = e2.message?.includes("429") || e2.message?.includes("Rate limit")
-          return new Response(
-            isRateLimit
-              ? "Browser Rendering API rate limit exceeded. Please try again later."
-              : `Failed to launch browser: ${e2.message}`,
-            {
-              status: isRateLimit ? 429 : 500,
-              headers: { "Content-Type": "text/plain" },
-            }
-          )
-        }
+        return await this.error(e.message)
       }
     }
 
-    // Reset keptAlive after each call to the DO
     this.keptAliveInSeconds = 0
 
     const context = await this.browser.createIncognitoBrowserContext()
@@ -163,9 +141,9 @@ export class Browser {
 
     return new Response(screenshot, {
       headers: {
-        "Cache-Control": `public, max-age=${maxage}`,
+        "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
         "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
-        "Expires": new Date(Date.now() + maxage * 1000).toUTCString(),
+        "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
       },
     })
   }
@@ -173,7 +151,7 @@ export class Browser {
   async alarm() {
     this.keptAliveInSeconds += 10
 
-    if (this.keptAliveInSeconds < KEEP_BROWSER_ALIVE_IN_SECONDS) {
+    if (this.keptAliveInSeconds < BROWSER_KEEP_ALIVE) {
       await this.storage.setAlarm(Date.now() + 10 * 1000)
     } else {
       if (this.browser) {
@@ -185,5 +163,19 @@ export class Browser {
         this.browser = null
       }
     }
+  }
+
+  async error(message) {
+    const isRateLimit = message?.includes("429") || message?.includes("Rate limit")
+
+    return new Response(
+      isRateLimit
+        ? "Browser Rendering API rate limit exceeded. Please try again later."
+        : `Failed to launch browser: ${message}`,
+      {
+        status: isRateLimit ? 429 : 500,
+        headers: { "Content-Type": "text/plain" },
+      }
+    )
   }
 }
