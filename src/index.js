@@ -165,11 +165,7 @@ export class Browser {
       await this.storage.setAlarm(Date.now() + 10 * 1000)
     } else {
       if (this.browser) {
-        try {
-          await this.browser.close()
-        } catch (e) {
-          // Ignore errors when closing
-        }
+        await this.browser.disconnect()
         this.browser = null
       }
     }
