@@ -101,7 +101,11 @@ export class Browser {
 
     if (!this.browser || !this.browser.isConnected()) {
       try {
-        this.browser = await puppeteer.launch(this.env.MYBROWSER)
+        // Launch browser with keep_alive set to 10 minutes (600000ms)
+        // This extends the timeout period and allows better session reuse
+        this.browser = await puppeteer.launch(this.env.MYBROWSER, {
+          keep_alive: 600000,
+        })
       } catch (e) {
         return await this.error(e.message)
       }
@@ -111,41 +115,47 @@ export class Browser {
 
     const context = await this.browser.createIncognitoBrowserContext()
 
-    const page = await context.newPage()
+    try {
+      const page = await context.newPage()
 
-    if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
-      await page.setExtraHTTPHeaders({
-        "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
-        "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
-      })
+      try {
+        if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
+          await page.setExtraHTTPHeaders({
+            "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
+            "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+          })
+        }
+
+        await page.setViewport({ width, height, deviceScaleFactor: scale })
+
+        await page.goto(url, { waitUntil: "networkidle0" })
+
+        const screenshot = await (format === "pdf" ? page.pdf({
+          format: "A4",
+          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+        }) : page.screenshot({
+          clip: { width, height, x: 0, y: 0 },
+        }))
+
+        // Reset keptAlive timer and reschedule alarm
+        this.keptAliveInSeconds = 0
+        await this.storage.setAlarm(Date.now() + 10 * 1000)
+
+        return new Response(screenshot, {
+          headers: {
+            "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
+            "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
+            "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
+          },
+        })
+      } catch (e) {
+        return await this.error(e.message)
+      } finally {
+        await page.close().catch(() => { })
+      }
+    } finally {
+      await context.close().catch(() => { })
     }
-
-    await page.setViewport({ width, height, deviceScaleFactor: scale })
-
-    await page.goto(url, { waitUntil: "networkidle0" })
-
-    const screenshot = await (format === "pdf" ? page.pdf({
-      format: "A4",
-      margin: { top: 20, right: 40, bottom: 20, left: 40 },
-    }) : page.screenshot({
-      clip: { width, height, x: 0, y: 0 },
-    }))
-
-    await page.close()
-
-    await context.close()
-
-    // Reset keptAlive timer and reschedule alarm
-    this.keptAliveInSeconds = 0
-    await this.storage.setAlarm(Date.now() + 10 * 1000)
-
-    return new Response(screenshot, {
-      headers: {
-        "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
-        "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
-        "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
-      },
-    })
   }
 
   async alarm() {
