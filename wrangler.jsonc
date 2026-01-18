@@ -8,6 +8,8 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "preview_urls": false,
+  "workers_dev": false,
   "durable_objects": {
     "bindings": [
       {
