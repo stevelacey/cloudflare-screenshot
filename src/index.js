@@ -66,6 +66,10 @@ export default {
       return await serveScreenshot(existing.body, format)
     }
 
+    if (request.method === "HEAD") {
+      return await serveScreenshot(null, format)
+    }
+
     // No existing screenshot, generate a new one
     return await fetchScreenshot(request, env, key, ctx)
   }
@@ -77,6 +81,8 @@ export class Browser {
     this.env = env
     this.keptAliveInSeconds = 0
     this.storage = this.state.storage
+    this.browserPromise = null
+    this.inflightRequests = new Map()
   }
 
   async fetch(request) {
@@ -99,62 +105,83 @@ export class Browser {
 
     const url = [base, path, query].filter(x => x).join("")
 
-    if (!this.browser || !this.browser.isConnected()) {
-      try {
-        // Launch browser with keep_alive set to 10 minutes (600000ms)
-        // This extends the timeout period and allows better session reuse
-        this.browser = await puppeteer.launch(this.env.MYBROWSER, {
-          keep_alive: 600000,
-        })
-      } catch (e) {
-        return await this.error(e.message)
-      }
+    if (this.inflightRequests.has(url)) {
+      const result = await this.inflightRequests.get(url)
+      return result.clone()
     }
 
-    this.keptAliveInSeconds = 0
-
-    const context = await this.browser.createIncognitoBrowserContext()
-
-    try {
-      const page = await context.newPage()
-
-      try {
-        if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
-          await page.setExtraHTTPHeaders({
-            "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
-            "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+    const requestPromise = (async () => {
+      if (!this.browser || !this.browser.isConnected()) {
+        if (!this.browserPromise) {
+          console.log(`Launching new browser...`)
+          this.browserPromise = puppeteer.launch(this.env.MYBROWSER, {
+            keep_alive: 600000,
           })
         }
 
-        await page.setViewport({ width, height, deviceScaleFactor: scale })
-
-        await page.goto(url, { waitUntil: "networkidle0" })
-
-        const screenshot = await (format === "pdf" ? page.pdf({
-          format: "A4",
-          margin: { top: 20, right: 40, bottom: 20, left: 40 },
-        }) : page.screenshot({
-          clip: { width, height, x: 0, y: 0 },
-        }))
-
-        // Reset keptAlive timer and reschedule alarm
-        this.keptAliveInSeconds = 0
-        await this.storage.setAlarm(Date.now() + 10 * 1000)
-
-        return new Response(screenshot, {
-          headers: {
-            "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
-            "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
-            "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
-          },
-        })
-      } catch (e) {
-        return await this.error(e.message)
-      } finally {
-        await page.close().catch(() => { })
+        try {
+          this.browser = await this.browserPromise
+        } catch (e) {
+          throw new Error(`Failed to launch browser: ${e.message}`)
+        } finally {
+          this.browserPromise = null
+        }
       }
+
+      this.keptAliveInSeconds = 0
+
+      const context = await this.browser.createIncognitoBrowserContext()
+
+      try {
+        const page = await context.newPage()
+
+        try {
+          if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
+            await page.setExtraHTTPHeaders({
+              "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
+              "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+            })
+          }
+
+          await page.setViewport({ width, height, deviceScaleFactor: scale })
+
+          await page.goto(url, { waitUntil: "networkidle0" })
+
+          const screenshot = await (format === "pdf" ? page.pdf({
+            format: "A4",
+            margin: { top: 20, right: 40, bottom: 20, left: 40 },
+          }) : page.screenshot({
+            clip: { width, height, x: 0, y: 0 },
+          }))
+
+          // Reset keptAlive timer and reschedule alarm
+          this.keptAliveInSeconds = 0
+          await this.storage.setAlarm(Date.now() + 10 * 1000)
+
+          return new Response(screenshot, {
+            headers: {
+              "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
+              "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
+              "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
+            },
+          })
+        } finally {
+          await page.close().catch(() => { })
+        }
+      } finally {
+        await context.close().catch(() => { })
+      }
+    })()
+
+    this.inflightRequests.set(url, requestPromise)
+
+    try {
+      const response = await requestPromise
+      return response.clone()
+    } catch (e) {
+      return await this.error(e.message)
     } finally {
-      await context.close().catch(() => { })
+      this.inflightRequests.delete(url)
     }
   }
 
