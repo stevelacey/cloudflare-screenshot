@@ -112,7 +112,7 @@ export class Browser {
 
     const requestPromise = (async () => {
       const ensureBrowser = async () => {
-        if (!this.browser || !this.browser.connected) {
+        if (!this.browser) {
           if (!this.browserPromise) {
             console.log(`Launching new browser...`)
             this.browserPromise = puppeteer.launch(this.env.MYBROWSER, {
