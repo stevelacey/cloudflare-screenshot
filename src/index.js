@@ -111,26 +111,43 @@ export class Browser {
     }
 
     const requestPromise = (async () => {
-      if (!this.browser || !this.browser.isConnected()) {
-        if (!this.browserPromise) {
-          console.log(`Launching new browser...`)
-          this.browserPromise = puppeteer.launch(this.env.MYBROWSER, {
-            keep_alive: 600000,
-          })
-        }
+      const ensureBrowser = async () => {
+        if (!this.browser || !this.browser.connected) {
+          if (!this.browserPromise) {
+            console.log(`Launching new browser...`)
+            this.browserPromise = puppeteer.launch(this.env.MYBROWSER, {
+              keep_alive: 600000,
+            })
+          }
 
-        try {
-          this.browser = await this.browserPromise
-        } catch (e) {
-          throw new Error(`Failed to launch browser: ${e.message}`)
-        } finally {
-          this.browserPromise = null
+          try {
+            this.browser = await this.browserPromise
+          } catch (e) {
+            this.browserPromise = null
+            throw new Error(`Failed to launch browser: ${e.message}`)
+          } finally {
+            this.browserPromise = null
+          }
         }
       }
 
+      await ensureBrowser()
+
       this.keptAliveInSeconds = 0
 
-      const context = await this.browser.createIncognitoBrowserContext()
+      let context
+      try {
+        context = await this.browser.createIncognitoBrowserContext()
+      } catch (e) {
+        if (e.message.includes("not connected") || e.message.includes("Session closed")) {
+          console.log("Browser disconnected, relaunching...")
+          this.browser = null
+          await ensureBrowser()
+          context = await this.browser.createIncognitoBrowserContext()
+        } else {
+          throw e
+        }
+      }
 
       try {
         const page = await context.newPage()
