@@ -109,7 +109,7 @@ export class Browser {
 
     this.keptAliveInSeconds = 0
 
-    const context = await this.browser.createIncognitoBrowserContext()
+    const context = await this.browser.createBrowserContext()
 
     const page = await context.newPage()
 
