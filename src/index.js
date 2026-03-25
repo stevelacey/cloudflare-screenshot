@@ -46,11 +46,17 @@ async function serveScreenshot(body, format) {
 
 export default {
   async fetch(request, env, ctx) {
-    const match = request.url.match(URL_PATTERN)
-    const { base, path, query, format } = match.groups
-
-    const hostname = new URL(base).hostname
-    const key = `${hostname}${path}${query || ""}`
+    const settings = request.url.match(URL_PATTERN).groups
+    const { base, format, path, query, width, height, scale } = settings
+    const { hostname } = new URL(base)
+    const key = [
+      hostname,
+      path,
+      width && height ? `-${width}x${height}` : "",
+      scale ? `@${scale}x` : "",
+      `.${format || "png"}`,
+      query,
+    ].filter(x => x).join("")
 
     // Check R2 bucket for existing screenshot
     const existing = await env.SCREENSHOTS.get(key)
