@@ -1,6 +1,10 @@
 Cloudflare Screenshot
 =====================
 
+[![CI](https://img.shields.io/github/actions/workflow/status/stevelacey/cloudflare-screenshot/ci.yml?branch=main&style=flat-square)](https://github.com/stevelacey/cloudflare-screenshot/actions/workflows/ci.yml?query=branch:main)
+[![Coverage](https://img.shields.io/codecov/c/github/stevelacey/cloudflare-screenshot?style=flat-square)](https://codecov.io/gh/stevelacey/cloudflare-screenshot)
+[![License: MIT](https://img.shields.io/github/license/stevelacey/cloudflare-screenshot?style=flat-square)](LICENSE.md)
+
 Screenshot webpages to render social media cards on-the-fly using Puppeteer; largely based on [how Pieter generates shareable pictures](https://levels.io/phantomjs-social-media-share-pictures) for [Nomad List](https://nomadlist.com).
 
 | [![Coworkations](https://coworkations.com/screenshots/cards/coworkations.png)](https://coworkations.com/screenshots/cards/coworkations.png) [📄 HTML](https://coworkations.com/cards/coworkations) [🖼️ PNG](https://coworkations.com/screenshots/cards/coworkations.png) | [![Hacker Paradise: Cape Town South Africa](https://coworkations.com/screenshots/cards/hacker-paradise/cape-town-south-africa.png)](https://coworkations.com/screenshots/cards/hacker-paradise/cape-town-south-africa.png) [📄 HTML](https://coworkations.com/cards/hacker-paradise/cape-town-south-africa) [🖼️ PNG](https://coworkations.com/screenshots/cards/hacker-paradise/cape-town-south-africa.png) |

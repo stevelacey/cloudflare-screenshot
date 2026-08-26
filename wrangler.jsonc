@@ -5,9 +5,7 @@
     "binding": "MYBROWSER"
   },
   "compatibility_date": "2024-04-19",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       {
@@ -19,9 +17,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": [
-        "Browser"
-      ]
+      "new_classes": ["Browser"]
     }
   ],
   "preview_urls": false,

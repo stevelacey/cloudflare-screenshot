@@ -9,7 +9,7 @@ const DEFAULT_HEIGHT = 720
 const DEFAULT_SCALE = 1
 const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
-  /^(?<base>https:\/\/[\w\.\/]+)\/screenshots?/,
+  /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
@@ -24,9 +24,12 @@ async function fetchScreenshot(request, env, key, ctx) {
 
   if (response.ok) {
     ctx.waitUntil(
-      response.clone().arrayBuffer().then(async (buffer) => {
-        await env.SCREENSHOTS.put(key, buffer)
-      })
+      response
+        .clone()
+        .arrayBuffer()
+        .then(async (buffer) => {
+          await env.SCREENSHOTS.put(key, buffer)
+        }),
     )
   }
 
@@ -49,14 +52,9 @@ export default {
     const settings = request.url.match(URL_PATTERN).groups
     const { base, format, path, query, width, height, scale } = settings
     const { hostname } = new URL(base)
-    const key = [
-      hostname,
-      path,
-      width && height ? `-${width}x${height}` : "",
-      scale ? `@${scale}x` : "",
-      `.${format || "png"}`,
-      query,
-    ].filter(x => x).join("")
+    const key = [hostname, path, width && height ? `-${width}x${height}` : "", scale ? `@${scale}x` : "", `.${format || "png"}`, query]
+      .filter((x) => x)
+      .join("")
 
     // Check R2 bucket for existing screenshot
     const existing = await env.SCREENSHOTS.get(key)
@@ -65,7 +63,7 @@ export default {
       const uploaded = existing.uploaded ? new Date(existing.uploaded).getTime() : null
 
       // If stale, trigger background refresh for next visitor
-      if (uploaded && (Date.now() - uploaded > STORAGE_TTL * 1000)) {
+      if (uploaded && Date.now() - uploaded > STORAGE_TTL * 1000) {
         fetchScreenshot(request, env, key, ctx)
       }
 
@@ -74,7 +72,7 @@ export default {
 
     // No existing screenshot, generate a new one
     return await fetchScreenshot(request, env, key, ctx)
-  }
+  },
 }
 
 export class Browser {
@@ -91,21 +89,21 @@ export class Browser {
     const { base, format, path, width, height, scale } = {
       ...settings,
       format: settings.format ?? DEFAULT_FORMAT,
-      width: parseInt(settings.width ?? DEFAULT_WIDTH),
-      height: parseInt(settings.height ?? DEFAULT_HEIGHT),
-      scale: parseInt(settings.scale ?? DEFAULT_SCALE),
+      width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
+      height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
+      scale: parseInt(settings.scale ?? DEFAULT_SCALE, 10),
     }
 
     const params = [
-      ...settings.query ? settings.query.replace(/^\?/, "").split("&") : [],
-      ...this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, "").split("&") : [],
+      ...(settings.query ? settings.query.replace(/^\?/, "").split("&") : []),
+      ...(this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, "").split("&") : []),
     ]
 
-    const query = params ? `?${params.join("&")}` : null
+    const query = params.length ? `?${params.join("&")}` : null
 
-    const url = [base, path, query].filter(x => x).join("")
+    const url = [base, path, query].filter((x) => x).join("")
 
-    if (!this.browser || !this.browser.isConnected()) {
+    if (!this.browser?.isConnected()) {
       try {
         this.browser = await puppeteer.launch(this.env.MYBROWSER)
       } catch (e) {
@@ -130,12 +128,14 @@ export class Browser {
 
     await page.goto(url, { waitUntil: "networkidle0" })
 
-    const screenshot = await (format === "pdf" ? page.pdf({
-      format: "A4",
-      margin: { top: 20, right: 40, bottom: 20, left: 40 },
-    }) : page.screenshot({
-      clip: { width, height, x: 0, y: 0 },
-    }))
+    const screenshot = await (format === "pdf"
+      ? page.pdf({
+          format: "A4",
+          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+        })
+      : page.screenshot({
+          clip: { width, height, x: 0, y: 0 },
+        }))
 
     await page.close()
 
@@ -149,7 +149,7 @@ export class Browser {
       headers: {
         "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
         "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
-        "Expires": new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
+        Expires: new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
       },
     })
   }
@@ -163,7 +163,7 @@ export class Browser {
       if (this.browser) {
         try {
           await this.browser.close()
-        } catch (e) {
+        } catch (_e) {
           // Ignore errors when closing
         }
         this.browser = null
@@ -174,14 +174,9 @@ export class Browser {
   async error(message) {
     const isRateLimit = message?.includes("429") || message?.includes("Rate limit")
 
-    return new Response(
-      isRateLimit
-        ? "Browser Rendering API rate limit exceeded. Please try again later."
-        : `Failed to launch browser: ${message}`,
-      {
-        status: isRateLimit ? 429 : 500,
-        headers: { "Content-Type": "text/plain" },
-      }
-    )
+    return new Response(isRateLimit ? "Browser Rendering API rate limit exceeded. Please try again later." : `Failed to launch browser: ${message}`, {
+      status: isRateLimit ? 429 : 500,
+      headers: { "Content-Type": "text/plain" },
+    })
   }
 }
