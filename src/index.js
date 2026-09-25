@@ -101,7 +101,7 @@ export class Browser {
 
     const query = params.length ? `?${params.join("&")}` : null
 
-    const url = [base, path, query].filter((x) => x).join("")
+    const url = [base, path === "/home" ? "/" : path, query].filter((x) => x).join("")
 
     if (!this.browser?.isConnected()) {
       try {

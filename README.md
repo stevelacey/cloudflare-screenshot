@@ -28,7 +28,7 @@ Screenshots can be of any webpage, you can pass query params through to your bac
 | 🖼 PNG (Cloudflare request) | 📄 HTML (webserver request) |
 | :-- | :-- |
 | https://coworkations.com/screenshots/hacker-paradise.png | https://coworkations.com/hacker-paradise |
-| https://steve.ly/screenshots/home.png?dark=on | https://steve.ly/home?dark=on |
+| https://steve.ly/screenshots/home.png?dark=on | https://steve.ly/?dark=on |
 
 For social media cards you might want to render a template that works well on social media:
 
@@ -38,6 +38,8 @@ For social media cards you might want to render a template that works well on so
 | https://coworkations.com/screenshots/cards/pack/ubud-bali-2.png | https://coworkations.com/cards/pack/ubud-bali-2 |
 
 The default dimensions for screenshots are 1280x720, which works well for most social media cards. You can specify different dimensions via the URL, e.g., `screenshots/1024x768/path/to/something.png`.
+
+To screenshot your homepage, request `home.png`, which captures `/`, e.g., `screenshots/home.png?dark=on` captures `/?dark=on`.
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 

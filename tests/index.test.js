@@ -254,6 +254,20 @@ describe("Browser", () => {
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?utm=test", { waitUntil: "networkidle0" })
   })
 
+  it("screenshots the homepage for /home, keeping the query string", async () => {
+    env.QUERY_PARAMS = "?utm=test"
+
+    await browser.fetch({ url: "https://example.com/screenshot/home.png?dark=on" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/?dark=on&utm=test", { waitUntil: "networkidle0" })
+  })
+
+  it("does not rewrite nested home paths", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/home.png" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/home", { waitUntil: "networkidle0" })
+  })
+
   it("sends CF Access headers when configured", async () => {
     env.CF_ACCESS_CLIENT_ID = "client-id"
     env.CF_ACCESS_CLIENT_SECRET = "client-secret"
