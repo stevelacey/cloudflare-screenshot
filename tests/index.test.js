@@ -66,6 +66,14 @@ describe("worker.fetch", () => {
     ctx = createCtx()
   })
 
+  it("returns an empty 404 for the root instead of screenshotting it", async () => {
+    const response = await worker.fetch({ url: "https://example.com/screenshots/" }, env, ctx)
+
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe("")
+    expect(env.SCREENSHOTS.get).not.toHaveBeenCalled()
+  })
+
   it("serves a fresh cached screenshot without triggering a background refresh", async () => {
     env.SCREENSHOTS.get.mockResolvedValue({
       body: "cached-bytes",

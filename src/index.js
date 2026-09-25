@@ -52,6 +52,11 @@ export default {
     const settings = request.url.match(URL_PATTERN).groups
     const { base, format, path, query, width, height, scale } = settings
     const { hostname } = new URL(base)
+
+    // Nothing to screenshot at the root
+    if (path === "/") {
+      return new Response(null, { status: 404 })
+    }
     const key = [hostname, path, width && height ? `-${width}x${height}` : "", scale ? `@${scale}x` : "", `.${format || "png"}`, query]
       .filter((x) => x)
       .join("")
