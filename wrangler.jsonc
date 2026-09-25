@@ -17,7 +17,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": ["Browser"]
+      "new_sqlite_classes": ["Browser"]
     }
   ],
   "preview_urls": false,
