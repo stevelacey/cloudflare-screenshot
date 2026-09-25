@@ -2,7 +2,7 @@ import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
 
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
-const BROWSER_KEEP_ALIVE = 60
+const BROWSER_KEEP_ALIVE = 5
 const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
@@ -79,7 +79,7 @@ export class Browser {
   constructor(state, env) {
     this.state = state
     this.env = env
-    this.keptAliveInSeconds = 0
+    this.pending = 0
     this.storage = this.state.storage
   }
 
@@ -111,39 +111,43 @@ export class Browser {
       }
     }
 
-    this.keptAliveInSeconds = 0
+    this.pending++
 
-    const context = await this.browser.createBrowserContext()
+    let screenshot
 
-    const page = await context.newPage()
+    try {
+      const context = await this.browser.createBrowserContext()
 
-    if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
-      await page.setExtraHTTPHeaders({
-        "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
-        "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
-      })
-    }
+      const page = await context.newPage()
 
-    await page.setViewport({ width, height, deviceScaleFactor: scale })
-
-    await page.goto(url, { waitUntil: "networkidle0" })
-
-    const screenshot = await (format === "pdf"
-      ? page.pdf({
-          format: "A4",
-          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+      if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
+        await page.setExtraHTTPHeaders({
+          "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
+          "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
         })
-      : page.screenshot({
-          clip: { width, height, x: 0, y: 0 },
-        }))
+      }
 
-    await page.close()
+      await page.setViewport({ width, height, deviceScaleFactor: scale })
 
-    await context.close()
+      await page.goto(url, { waitUntil: "networkidle0" })
 
-    // Reset keptAlive timer and reschedule alarm
-    this.keptAliveInSeconds = 0
-    await this.storage.setAlarm(Date.now() + 10 * 1000)
+      screenshot = await (format === "pdf"
+        ? page.pdf({
+            format: "A4",
+            margin: { top: 20, right: 40, bottom: 20, left: 40 },
+          })
+        : page.screenshot({
+            clip: { width, height, x: 0, y: 0 },
+          }))
+
+      await page.close()
+
+      await context.close()
+    } finally {
+      // Close the browser once it has been idle for BROWSER_KEEP_ALIVE seconds
+      this.pending--
+      await this.storage.setAlarm(Date.now() + BROWSER_KEEP_ALIVE * 1000)
+    }
 
     return new Response(screenshot, {
       headers: {
@@ -155,19 +159,14 @@ export class Browser {
   }
 
   async alarm() {
-    this.keptAliveInSeconds += 10
-
-    if (this.keptAliveInSeconds < BROWSER_KEEP_ALIVE) {
-      await this.storage.setAlarm(Date.now() + 10 * 1000)
-    } else {
-      if (this.browser) {
-        try {
-          await this.browser.close()
-        } catch (_e) {
-          // Ignore errors when closing
-        }
-        this.browser = null
+    // A screenshot in progress will schedule another alarm when it finishes
+    if (this.pending === 0 && this.browser) {
+      try {
+        await this.browser.close()
+      } catch (_e) {
+        // Ignore errors when closing
       }
+      this.browser = null
     }
   }
 

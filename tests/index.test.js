@@ -213,7 +213,16 @@ describe("Browser", () => {
     expect(response.headers.get("Content-Type")).toBe("image/png")
     expect(await response.text()).toBe("png-bytes")
     expect(state.storage.setAlarm).toHaveBeenCalled()
-    expect(browser.keptAliveInSeconds).toBe(0)
+    expect(browser.pending).toBe(0)
+  })
+
+  it("schedules the idle alarm even when the page fails to load", async () => {
+    instance.page.goto.mockRejectedValue(new Error("timeout"))
+
+    await expect(browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })).rejects.toThrow("timeout")
+
+    expect(state.storage.setAlarm).toHaveBeenCalled()
+    expect(browser.pending).toBe(0)
   })
 
   it("generates a PDF with dimensions and scale parsed from the URL", async () => {
@@ -346,24 +355,22 @@ describe("Browser.alarm", () => {
     browser = new Browser(state, env)
   })
 
-  it("reschedules itself while under the keep-alive threshold", async () => {
+  it("leaves the browser open while a screenshot is in progress", async () => {
+    browser.pending = 1
+    browser.browser = { close: vi.fn().mockResolvedValue(undefined) }
+
     await browser.alarm()
 
-    expect(browser.keptAliveInSeconds).toBe(10)
-    expect(browser.storage.setAlarm).toHaveBeenCalledTimes(1)
+    expect(browser.browser.close).not.toHaveBeenCalled()
   })
 
-  it("does nothing when the threshold is reached without an active browser", async () => {
-    browser.keptAliveInSeconds = 50
-
+  it("does nothing without an active browser", async () => {
     await browser.alarm()
 
     expect(browser.browser).toBeUndefined()
-    expect(browser.storage.setAlarm).not.toHaveBeenCalled()
   })
 
-  it("closes the browser once the keep-alive threshold is reached", async () => {
-    browser.keptAliveInSeconds = 50
+  it("closes the browser once idle", async () => {
     browser.browser = { close: vi.fn().mockResolvedValue(undefined) }
     const closeMock = browser.browser.close
 
@@ -374,7 +381,6 @@ describe("Browser.alarm", () => {
   })
 
   it("swallows errors when closing the browser during cleanup", async () => {
-    browser.keptAliveInSeconds = 50
     browser.browser = { close: vi.fn().mockRejectedValue(new Error("close failed")) }
 
     await expect(browser.alarm()).resolves.toBeUndefined()
