@@ -10,7 +10,7 @@ function createMockPage() {
   return {
     setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
     setViewport: vi.fn().mockResolvedValue(undefined),
-    goto: vi.fn().mockResolvedValue(undefined),
+    goto: vi.fn().mockResolvedValue({ ok: () => true, status: () => 200 }),
     pdf: vi.fn().mockResolvedValue("pdf-bytes"),
     screenshot: vi.fn().mockResolvedValue("png-bytes"),
     close: vi.fn().mockResolvedValue(undefined),
@@ -214,6 +214,18 @@ describe("Browser", () => {
     expect(await response.text()).toBe("png-bytes")
     expect(state.storage.setAlarm).toHaveBeenCalled()
     expect(browser.pending).toBe(0)
+  })
+
+  it("passes error pages through without screenshotting them", async () => {
+    instance.page.goto.mockResolvedValue({ ok: () => false, status: () => 404 })
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe("")
+    expect(instance.page.screenshot).not.toHaveBeenCalled()
+    expect(instance.context.close).toHaveBeenCalled()
+    expect(state.storage.setAlarm).toHaveBeenCalled()
   })
 
   it("schedules the idle alarm even when the page fails to load", async () => {

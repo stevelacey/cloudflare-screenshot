@@ -129,7 +129,14 @@ export class Browser {
 
       await page.setViewport({ width, height, deviceScaleFactor: scale })
 
-      await page.goto(url, { waitUntil: "networkidle0" })
+      const response = await page.goto(url, { waitUntil: "networkidle0" })
+
+      // Pass error pages through instead of screenshotting them
+      if (!response.ok()) {
+        await context.close()
+
+        return new Response(null, { status: response.status() })
+      }
 
       screenshot = await (format === "pdf"
         ? page.pdf({
