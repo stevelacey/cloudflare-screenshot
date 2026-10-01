@@ -1,9 +1,14 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import worker, { Browser } from "../src/index.js"
+import { record } from "../src/video.js"
 
 vi.mock("@cloudflare/puppeteer", () => ({
   default: { launch: vi.fn() },
+}))
+
+vi.mock("../src/video.js", () => ({
+  record: vi.fn().mockResolvedValue("video-bytes"),
 }))
 
 function createMockPage() {
@@ -100,6 +105,17 @@ describe("worker.fetch", () => {
     expect(response.headers.get("Content-Type")).toBe("application/pdf")
   })
 
+  it("serves a cached video with the correct content type", async () => {
+    env.SCREENSHOTS.get.mockResolvedValue({
+      body: "cached-mp4-bytes",
+      uploaded: new Date().toISOString(),
+    })
+
+    const response = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.mp4" }, env, ctx)
+
+    expect(response.headers.get("Content-Type")).toBe("video/mp4")
+  })
+
   it("defaults to png content type when the cached entry has no format", async () => {
     env.SCREENSHOTS.get.mockResolvedValue({
       body: "cached-bytes",
@@ -165,6 +181,14 @@ describe("worker.fetch", () => {
     await worker.fetch({ url: "https://example.com/screenshot/foo/bar.pdf?dark=on" }, env, ctx)
 
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar.pdf?dark=on")
+  })
+
+  it("includes duration in the cache key", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-1200x630-20s@2x.mp4")
   })
 
   it("includes scale in the cache key", async () => {
@@ -263,6 +287,36 @@ describe("Browser", () => {
     expect(instance.page.screenshot).not.toHaveBeenCalled()
     expect(response.headers.get("Content-Type")).toBe("application/pdf")
     expect(await response.text()).toBe("pdf-bytes")
+  })
+
+  it("records an MP4 at the scaled dimensions for the requested duration", async () => {
+    vi.mocked(record).mockResolvedValue("mp4-bytes")
+
+    const response = await browser.fetch({
+      url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4",
+    })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "mp4", width: 2400, height: 1260, duration: 20 })
+    expect(instance.page.screenshot).not.toHaveBeenCalled()
+    expect(response.headers.get("Content-Type")).toBe("video/mp4")
+    expect(await response.text()).toBe("mp4-bytes")
+  })
+
+  it("records a GIF for five seconds by default", async () => {
+    vi.mocked(record).mockResolvedValue("gif-bytes")
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.gif" })
+
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "gif", width: 1280, height: 720, duration: 5 })
+    expect(response.headers.get("Content-Type")).toBe("image/gif")
+  })
+
+  it("treats durations over 30 seconds as part of the path", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/60s/foo/bar.mp4" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/60s/foo/bar", { waitUntil: "networkidle0" })
+    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ duration: 5 }))
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {

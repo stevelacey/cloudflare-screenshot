@@ -21,6 +21,13 @@
     }
   ],
   "preview_urls": false,
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.browser.js"],
+      "fallthrough": true
+    }
+  ],
   "workers_dev": false,
   "observability": {
     "logs": {

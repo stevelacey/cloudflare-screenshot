@@ -6,6 +6,8 @@ export default defineConfig({
     coverage: {
       enabled: true,
       include: ["src/**/*.js"],
+      // Injected into and run by the browser
+      exclude: ["src/**/*.browser.js"],
       thresholds: {
         lines: 100,
         functions: 100,

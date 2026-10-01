@@ -1,4 +1,7 @@
 {
+  "files": {
+    "includes": ["**", "!src/gifenc.browser.js", "!src/h264.browser.js"]
+  },
   "formatter": {
     "indentStyle": "space",
     "lineWidth": 160

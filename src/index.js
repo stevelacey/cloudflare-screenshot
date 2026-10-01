@@ -1,8 +1,11 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
+import { prepare, record } from "./video"
 
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
 const BROWSER_KEEP_ALIVE = 5
+const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png" }
+const DEFAULT_DURATION = 5
 const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
@@ -11,9 +14,10 @@ const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
+  /(?:\/(?<duration>[1-9]|[12][0-9]|30)s)?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
-  /(?:\.(?<format>(pdf|png)))?/,
+  /(?:\.(?<format>(gif|mp4|pdf|png)))?/,
   /(?<query>\?.*)?$/,
 )
 
@@ -37,11 +41,9 @@ async function fetchScreenshot(request, env, key, ctx) {
 }
 
 async function serveScreenshot(body, format) {
-  const contentType = (format || "png") === "pdf" ? "application/pdf" : `image/${format || "png"}`
-
   return new Response(body, {
     headers: {
-      "Content-Type": contentType,
+      "Content-Type": CONTENT_TYPES[format || DEFAULT_FORMAT],
       "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
     },
   })
@@ -50,14 +52,22 @@ async function serveScreenshot(body, format) {
 export default {
   async fetch(request, env, ctx) {
     const settings = request.url.match(URL_PATTERN).groups
-    const { base, format, path, query, width, height, scale } = settings
+    const { base, duration, format, path, query, width, height, scale } = settings
     const { hostname } = new URL(base)
 
     // Nothing to screenshot at the root
     if (path === "/") {
       return new Response(null, { status: 404 })
     }
-    const key = [hostname, path, width && height ? `-${width}x${height}` : "", scale ? `@${scale}x` : "", `.${format || "png"}`, query]
+    const key = [
+      hostname,
+      path,
+      width && height ? `-${width}x${height}` : "",
+      duration ? `-${duration}s` : "",
+      scale ? `@${scale}x` : "",
+      `.${format || "png"}`,
+      query,
+    ]
       .filter((x) => x)
       .join("")
 
@@ -91,8 +101,9 @@ export class Browser {
   async fetch(request) {
     const settings = request.url.match(URL_PATTERN).groups
 
-    const { base, format, path, width, height, scale } = {
+    const { base, duration, format, path, width, height, scale } = {
       ...settings,
+      duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
       format: settings.format ?? DEFAULT_FORMAT,
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
       height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
@@ -134,6 +145,10 @@ export class Browser {
 
       await page.setViewport({ width, height, deviceScaleFactor: scale })
 
+      if (format === "gif" || format === "mp4") {
+        await prepare(page)
+      }
+
       const response = await page.goto(url, { waitUntil: "networkidle0" })
 
       // Pass error pages through instead of screenshotting them
@@ -143,14 +158,18 @@ export class Browser {
         return new Response(null, { status: response.status() })
       }
 
-      screenshot = await (format === "pdf"
-        ? page.pdf({
-            format: "A4",
-            margin: { top: 20, right: 40, bottom: 20, left: 40 },
-          })
-        : page.screenshot({
-            clip: { width, height, x: 0, y: 0 },
-          }))
+      if (format === "pdf") {
+        screenshot = await page.pdf({
+          format: "A4",
+          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+        })
+      } else if (format === "png") {
+        screenshot = await page.screenshot({
+          clip: { width, height, x: 0, y: 0 },
+        })
+      } else {
+        screenshot = await record(page, { format, width: width * scale, height: height * scale, duration })
+      }
 
       await page.close()
 
@@ -164,7 +183,7 @@ export class Browser {
     return new Response(screenshot, {
       headers: {
         "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
-        "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
+        "Content-Type": CONTENT_TYPES[format],
         Expires: new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
       },
     })
