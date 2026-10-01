@@ -43,6 +43,8 @@ To screenshot your homepage, request `home.png`, which captures `/`, e.g., `scre
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 
+Videos are recorded by requesting `.mp4` or `.gif` instead, e.g., `screenshots/path/to/something.mp4`. They run for 5 seconds by default, and you can choose anywhere from 1 to 30 seconds via the URL, after any dimensions, e.g., `screenshots/1200x630/20s/path/to/something.mp4`. Recording starts once the page has loaded, so loop any animations you want to capture or delay their start. MP4s are H.264 at 30fps; GIFs are 10fps and much larger, so you may want to keep them small.
+
 If you want to configure some query params to always pass through to your backend, you can set the `QUERY_PARAMS` environment variable and they will be appended to every webserver request.
 
 
@@ -55,6 +57,15 @@ You’ll probably want meta tags something like these:
 <meta itemprop="image" content="https://coworkations.com/screenshots/cards/coworkations.png">
 <meta property="og:image" content="https://coworkations.com/screenshots/cards/coworkations.png">
 <meta name="twitter:image" content="https://coworkations.com/screenshots/cards/coworkations.png">
+```
+
+And for a video card:
+
+```html
+<meta property="og:video" content="https://steve.ly/screenshots/home.mp4?dark=on">
+<meta property="og:video:type" content="video/mp4">
+<meta property="og:video:width" content="1280">
+<meta property="og:video:height" content="720">
 ```
 
 

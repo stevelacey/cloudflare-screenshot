@@ -1,8 +1,12 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
+import { prepare, record } from "./video"
 
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
+const BROWSER_IDLE_LIMIT = 10 * 60 * 1000
 const BROWSER_KEEP_ALIVE = 5
+const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png" }
+const DEFAULT_DURATION = 5
 const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
@@ -11,37 +15,36 @@ const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
+  /(?:\/(?<duration>[1-9]|[12][0-9]|30)s)?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
-  /(?:\.(?<format>(pdf|png)))?/,
+  /(?:\.(?<format>(gif|mp4|pdf|png)))?/,
   /(?<query>\?.*)?$/,
 )
+const VIDEO_FORMATS = ["gif", "mp4"]
 
-async function fetchScreenshot(request, env, key, ctx) {
-  const browser = env.BROWSER.get(env.BROWSER.idFromName("browser"))
+const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 
-  const response = await browser.fetch(request.url)
+function cacheKey({ base, duration, format, path, query, width, height, scale }) {
+  const { hostname } = new URL(base)
 
-  if (response.ok) {
-    ctx.waitUntil(
-      response
-        .clone()
-        .arrayBuffer()
-        .then(async (buffer) => {
-          await env.SCREENSHOTS.put(key, buffer)
-        }),
-    )
-  }
-
-  return response
+  return [
+    hostname,
+    path,
+    width && height ? `-${width}x${height}` : "",
+    duration ? `-${duration}s` : "",
+    scale ? `@${scale}x` : "",
+    `.${format || DEFAULT_FORMAT}`,
+    query,
+  ]
+    .filter((x) => x)
+    .join("")
 }
 
 async function serveScreenshot(body, format) {
-  const contentType = (format || "png") === "pdf" ? "application/pdf" : `image/${format || "png"}`
-
   return new Response(body, {
     headers: {
-      "Content-Type": contentType,
+      "Content-Type": CONTENT_TYPES[format || DEFAULT_FORMAT],
       "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
     },
   })
@@ -50,33 +53,28 @@ async function serveScreenshot(body, format) {
 export default {
   async fetch(request, env, ctx) {
     const settings = request.url.match(URL_PATTERN).groups
-    const { base, format, path, query, width, height, scale } = settings
-    const { hostname } = new URL(base)
 
     // Nothing to screenshot at the root
-    if (path === "/") {
+    if (settings.path === "/") {
       return new Response(null, { status: 404 })
     }
-    const key = [hostname, path, width && height ? `-${width}x${height}` : "", scale ? `@${scale}x` : "", `.${format || "png"}`, query]
-      .filter((x) => x)
-      .join("")
 
     // Check R2 bucket for existing screenshot
-    const existing = await env.SCREENSHOTS.get(key)
+    const existing = await env.SCREENSHOTS.get(cacheKey(settings))
 
     if (existing) {
       const uploaded = existing.uploaded ? new Date(existing.uploaded).getTime() : null
 
       // If stale, trigger background refresh for next visitor
       if (uploaded && Date.now() - uploaded > STORAGE_TTL * 1000) {
-        fetchScreenshot(request, env, key, ctx)
+        ctx.waitUntil(browserFor(env).fetch(request.url))
       }
 
-      return await serveScreenshot(existing.body, format)
+      return await serveScreenshot(existing.body, settings.format)
     }
 
     // No existing screenshot, generate a new one
-    return await fetchScreenshot(request, env, key, ctx)
+    return await browserFor(env).fetch(request.url)
   },
 }
 
@@ -85,14 +83,28 @@ export class Browser {
     this.state = state
     this.env = env
     this.pending = 0
+    this.inflight = new Map()
     this.storage = this.state.storage
   }
 
   async fetch(request) {
     const settings = request.url.match(URL_PATTERN).groups
+    const key = cacheKey(settings)
 
-    const { base, format, path, width, height, scale } = {
+    if (!this.inflight.has(key)) {
+      this.inflight.set(
+        key,
+        this.generate(settings, key).finally(() => this.inflight.delete(key)),
+      )
+    }
+
+    return (await this.inflight.get(key)).clone()
+  }
+
+  async generate(settings, key) {
+    const { base, duration, format, path, width, height, scale } = {
       ...settings,
+      duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
       format: settings.format ?? DEFAULT_FORMAT,
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
       height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
@@ -110,18 +122,19 @@ export class Browser {
 
     if (!this.browser?.isConnected()) {
       try {
-        this.browser = await puppeteer.launch(this.env.MYBROWSER)
+        this.browser = await puppeteer.launch(this.env.MYBROWSER, { keep_alive: BROWSER_IDLE_LIMIT })
       } catch (e) {
-        return await this.error(e.message)
+        return this.error("Failed to launch browser", e.message)
       }
     }
 
     this.pending++
 
+    let context
     let screenshot
 
     try {
-      const context = await this.browser.createBrowserContext()
+      context = await this.browser.createBrowserContext()
 
       const page = await context.newPage()
 
@@ -134,37 +147,51 @@ export class Browser {
 
       await page.setViewport({ width, height, deviceScaleFactor: scale })
 
+      if (VIDEO_FORMATS.includes(format)) {
+        await prepare(page)
+      }
+
       const response = await page.goto(url, { waitUntil: "networkidle0" })
 
       // Pass error pages through instead of screenshotting them
       if (!response.ok()) {
-        await context.close()
-
         return new Response(null, { status: response.status() })
       }
 
-      screenshot = await (format === "pdf"
-        ? page.pdf({
-            format: "A4",
-            margin: { top: 20, right: 40, bottom: 20, left: 40 },
-          })
-        : page.screenshot({
-            clip: { width, height, x: 0, y: 0 },
-          }))
+      if (VIDEO_FORMATS.includes(format)) {
+        screenshot = await record(page, { format, width: width * scale, height: height * scale, duration })
+      } else if (format === "pdf") {
+        screenshot = await page.pdf({
+          format: "A4",
+          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+        })
+      } else {
+        screenshot = await page.screenshot({
+          clip: { width, height, x: 0, y: 0 },
+        })
+      }
+    } catch (e) {
+      console.error(`Failed to render ${url}: ${e.message}`)
 
-      await page.close()
-
-      await context.close()
+      return this.error("Failed to render page", e.message)
     } finally {
+      await context?.close().catch(() => {})
+
       // Close the browser once it has been idle for BROWSER_KEEP_ALIVE seconds
       this.pending--
       await this.storage.setAlarm(Date.now() + BROWSER_KEEP_ALIVE * 1000)
     }
 
+    try {
+      await this.env.SCREENSHOTS.put(key, screenshot)
+    } catch (e) {
+      console.error(`Failed to save ${key}: ${e.message}`)
+    }
+
     return new Response(screenshot, {
       headers: {
         "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
-        "Content-Type": format === "pdf" ? "application/pdf" : `image/${format}`,
+        "Content-Type": CONTENT_TYPES[format],
         Expires: new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
       },
     })
@@ -182,12 +209,16 @@ export class Browser {
     }
   }
 
-  async error(message) {
+  error(reason, message) {
     const isRateLimit = message?.includes("429") || message?.includes("Rate limit")
 
-    return new Response(isRateLimit ? "Browser Rendering API rate limit exceeded. Please try again later." : `Failed to launch browser: ${message}`, {
+    return new Response(isRateLimit ? "Browser Rendering API rate limit exceeded. Please try again later." : `${reason}: ${message}`, {
       status: isRateLimit ? 429 : 500,
-      headers: { "Content-Type": "text/plain" },
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/plain",
+        ...(isRateLimit ? { "Retry-After": "60" } : {}),
+      },
     })
   }
 }

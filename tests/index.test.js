@@ -1,9 +1,15 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import worker, { Browser } from "../src/index.js"
+import { prepare, record } from "../src/video.js"
 
 vi.mock("@cloudflare/puppeteer", () => ({
   default: { launch: vi.fn() },
+}))
+
+vi.mock("../src/video.js", () => ({
+  prepare: vi.fn().mockResolvedValue(undefined),
+  record: vi.fn().mockResolvedValue("video-bytes"),
 }))
 
 function createMockPage() {
@@ -100,6 +106,17 @@ describe("worker.fetch", () => {
     expect(response.headers.get("Content-Type")).toBe("application/pdf")
   })
 
+  it("serves a cached video with the correct content type", async () => {
+    env.SCREENSHOTS.get.mockResolvedValue({
+      body: "cached-mp4-bytes",
+      uploaded: new Date().toISOString(),
+    })
+
+    const response = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.mp4" }, env, ctx)
+
+    expect(response.headers.get("Content-Type")).toBe("video/mp4")
+  })
+
   it("defaults to png content type when the cached entry has no format", async () => {
     env.SCREENSHOTS.get.mockResolvedValue({
       body: "cached-bytes",
@@ -128,21 +145,7 @@ describe("worker.fetch", () => {
 
     expect(await response.text()).toBe("stale-bytes")
     expect(env.stub.fetch).toHaveBeenCalledWith("https://example.com/screenshot/foo/bar.png")
-
-    await ctx.waitUntil.mock.calls[0][0]
-
-    expect(env.SCREENSHOTS.put).toHaveBeenCalledWith("example.com/foo/bar.png", expect.any(ArrayBuffer))
-  })
-
-  it("does not persist a failed background refresh to R2", async () => {
-    const staleDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    env.SCREENSHOTS.get.mockResolvedValue({ body: "stale-bytes", uploaded: staleDate })
-    env.stub.fetch.mockResolvedValue(new Response("nope", { status: 500 }))
-
-    await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
-
-    expect(ctx.waitUntil).not.toHaveBeenCalled()
-    expect(env.SCREENSHOTS.put).not.toHaveBeenCalled()
+    expect(await ctx.waitUntil.mock.calls[0][0]).toBeInstanceOf(Response)
   })
 
   it("fetches and serves a new screenshot on a cache miss", async () => {
@@ -153,10 +156,7 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-1024x768.png")
     expect(env.stub.fetch).toHaveBeenCalledWith("https://example.com/screenshot/1024x768/foo/bar.png")
     expect(await response.text()).toBe("brand-new-bytes")
-
-    await ctx.waitUntil.mock.calls[0][0]
-
-    expect(env.SCREENSHOTS.put).toHaveBeenCalledWith("example.com/foo/bar-1024x768.png", expect.any(ArrayBuffer))
+    expect(env.SCREENSHOTS.put).not.toHaveBeenCalled()
   })
 
   it("builds the cache key from scale, format, and query string", async () => {
@@ -167,6 +167,14 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar.pdf?dark=on")
   })
 
+  it("includes duration in the cache key", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-1200x630-20s@2x.mp4")
+  })
+
   it("includes scale in the cache key", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
@@ -175,14 +183,12 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar@2x.png")
   })
 
-  it("does not persist a failed cache-miss fetch to R2", async () => {
+  it("passes a failed cache-miss fetch through", async () => {
     env.stub.fetch.mockResolvedValue(new Response("boom", { status: 502 }))
 
     const response = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
 
     expect(response.status).toBe(502)
-    expect(ctx.waitUntil).not.toHaveBeenCalled()
-    expect(env.SCREENSHOTS.put).not.toHaveBeenCalled()
   })
 })
 
@@ -201,12 +207,42 @@ describe("Browser", () => {
     browser = new Browser(state, env)
   })
 
+  it("saves what it makes to R2 under the cache key", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/1200x630/foo/bar.png?dark=on" })
+
+    expect(env.SCREENSHOTS.put).toHaveBeenCalledWith("example.com/foo/bar-1200x630.png?dark=on", "png-bytes")
+  })
+
+  it("still serves a screenshot it could not save", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    env.SCREENSHOTS.put.mockRejectedValue(new Error("R2 down"))
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar" })
+
+    expect(await response.text()).toBe("png-bytes")
+    expect(error).toHaveBeenCalledWith("Failed to save example.com/foo/bar.png: R2 down")
+    error.mockRestore()
+  })
+
+  it("shares one recording between requests for the same screenshot", async () => {
+    const url = "https://example.com/screenshot/foo/bar"
+
+    const responses = await Promise.all([browser.fetch({ url }), browser.fetch({ url })])
+
+    expect(instance.page.screenshot).toHaveBeenCalledTimes(1)
+    expect(await Promise.all(responses.map((response) => response.text()))).toEqual(["png-bytes", "png-bytes"])
+
+    await browser.fetch({ url })
+
+    expect(instance.page.screenshot).toHaveBeenCalledTimes(2)
+  })
+
   it("launches a browser and takes a screenshot with default dimensions", async () => {
     const response = await browser.fetch({
       url: "https://example.com/screenshot/foo/bar",
     })
 
-    expect(puppeteer.launch).toHaveBeenCalledWith(env.MYBROWSER)
+    expect(puppeteer.launch).toHaveBeenCalledWith(env.MYBROWSER, { keep_alive: 600000 })
     expect(instance.page.setViewport).toHaveBeenCalledWith({
       width: 1280,
       height: 720,
@@ -236,13 +272,22 @@ describe("Browser", () => {
     expect(state.storage.setAlarm).toHaveBeenCalled()
   })
 
-  it("schedules the idle alarm even when the page fails to load", async () => {
+  it("returns a 500 and cleans up when the page fails to load", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
     instance.page.goto.mockRejectedValue(new Error("timeout"))
+    instance.context.close.mockRejectedValue(new Error("already closed"))
 
-    await expect(browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })).rejects.toThrow("timeout")
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
 
+    expect(response.status).toBe(500)
+    expect(response.headers.get("Cache-Control")).toBe("no-store")
+    expect(await response.text()).toBe("Failed to render page: timeout")
+    expect(error).toHaveBeenCalledWith("Failed to render https://example.com/foo/bar: timeout")
+    expect(instance.context.close).toHaveBeenCalled()
+    expect(env.SCREENSHOTS.put).not.toHaveBeenCalled()
     expect(state.storage.setAlarm).toHaveBeenCalled()
     expect(browser.pending).toBe(0)
+    error.mockRestore()
   })
 
   it("generates a PDF with dimensions and scale parsed from the URL", async () => {
@@ -263,6 +308,38 @@ describe("Browser", () => {
     expect(instance.page.screenshot).not.toHaveBeenCalled()
     expect(response.headers.get("Content-Type")).toBe("application/pdf")
     expect(await response.text()).toBe("pdf-bytes")
+  })
+
+  it("records an MP4 at the scaled dimensions for the requested duration", async () => {
+    vi.mocked(record).mockResolvedValue("mp4-bytes")
+
+    const response = await browser.fetch({
+      url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4",
+    })
+
+    expect(prepare).toHaveBeenCalledWith(instance.page)
+    expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(instance.page.goto.mock.invocationCallOrder[0])
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "mp4", width: 2400, height: 1260, duration: 20 })
+    expect(instance.page.screenshot).not.toHaveBeenCalled()
+    expect(response.headers.get("Content-Type")).toBe("video/mp4")
+    expect(await response.text()).toBe("mp4-bytes")
+  })
+
+  it("records a GIF for five seconds by default", async () => {
+    vi.mocked(record).mockResolvedValue("gif-bytes")
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.gif" })
+
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "gif", width: 1280, height: 720, duration: 5 })
+    expect(response.headers.get("Content-Type")).toBe("image/gif")
+  })
+
+  it("treats durations over 30 seconds as part of the path", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/60s/foo/bar.mp4" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/60s/foo/bar", { waitUntil: "networkidle0" })
+    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ duration: 5 }))
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {
@@ -345,6 +422,7 @@ describe("Browser", () => {
     })
 
     expect(response.status).toBe(429)
+    expect(response.headers.get("Retry-After")).toBe("60")
     expect(await response.text()).toContain("rate limit exceeded")
   })
 
@@ -359,9 +437,10 @@ describe("Browser", () => {
   })
 
   it("treats a missing error message as a generic failure", async () => {
-    const response = await browser.error()
+    const response = await browser.error("Failed to launch browser")
 
     expect(response.status).toBe(500)
+    expect(response.headers.get("Retry-After")).toBeNull()
     expect(await response.text()).toBe("Failed to launch browser: undefined")
   })
 })
