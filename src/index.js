@@ -4,6 +4,8 @@ import { prepare, record } from "./video"
 
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
 const BROWSER_KEEP_ALIVE = 5
+// Browser Rendering drops a browser that hears nothing for a minute by default, which a long encode can exceed. The alarm still closes it when idle
+const BROWSER_IDLE_LIMIT = 10 * 60 * 1000
 const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png" }
 const DEFAULT_DURATION = 5
 const DEFAULT_FORMAT = "png"
@@ -121,7 +123,7 @@ export class Browser {
 
     if (!this.browser?.isConnected()) {
       try {
-        this.browser = await puppeteer.launch(this.env.MYBROWSER)
+        this.browser = await puppeteer.launch(this.env.MYBROWSER, { keep_alive: BROWSER_IDLE_LIMIT })
       } catch (e) {
         return await this.error(e.message)
       }

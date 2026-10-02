@@ -1,5 +1,5 @@
 import clock from "./clock.browser.js"
-import encoder from "./encoder.browser.js"
+import encoderSource from "./encoder.browser.js"
 import gifenc from "./gifenc.browser.js"
 import h264 from "./h264.browser.js"
 
@@ -29,7 +29,10 @@ const sizeOf = (box) => 8 + box.payload.length + (box.children ?? []).reduce((to
 function write(boxes, output, position = 0) {
   for (const box of boxes) {
     new DataView(output.buffer).setUint32(position, sizeOf(box))
-    output.set([...box.type].map((c) => c.charCodeAt(0)), position + 4)
+    output.set(
+      [...box.type].map((c) => c.charCodeAt(0)),
+      position + 4,
+    )
     output.set(box.payload, position + 8)
     position = write(box.children ?? [], output, position + 8 + box.payload.length)
   }
@@ -39,7 +42,7 @@ function write(boxes, output, position = 0) {
 
 const find = (boxes, type) => boxes.flatMap((box) => [...(box.type === type ? [box] : []), ...find(box.children ?? [], type)])
 
-// x264 leaves the colour space unlabelled and moov at the end, so label it BT.709 and move moov ahead of mdat to let playback start early
+// Label the video BT.709 and move moov ahead of the samples so playback can start while the file is still downloading
 export function optimize(bytes) {
   const boxes = parse(bytes)
   const moov = boxes.find(({ type }) => type === "moov")
@@ -49,6 +52,10 @@ export function optimize(bytes) {
     return bytes
   }
 
+  // Measure before labelling, so a moov that is already first still shifts when the label makes it larger
+  const offsetOf = (list) => list.slice(0, list.indexOf(mdat)).reduce((total, box) => total + sizeOf(box), 0)
+  const before = offsetOf(boxes)
+
   for (const avc1 of find([moov], "avc1")) {
     avc1.children = [
       ...avc1.children.filter(({ type }) => type !== "colr"),
@@ -56,10 +63,11 @@ export function optimize(bytes) {
       { type: "colr", payload: new Uint8Array([..."nclx"].map((c) => c.charCodeAt(0)).concat([0, 1, 0, 1, 0, 1, 0])) },
     ]
   }
-
-  const offsetOf = (list) => list.slice(0, list.indexOf(mdat)).reduce((total, box) => total + sizeOf(box), 0)
-  const before = offsetOf(boxes)
-  const reordered = [...boxes.slice(0, boxes.indexOf(mdat)).filter((box) => box !== moov), moov, ...boxes.slice(boxes.indexOf(mdat)).filter((box) => box !== moov)]
+  const reordered = [
+    ...boxes.slice(0, boxes.indexOf(mdat)).filter((box) => box !== moov),
+    moov,
+    ...boxes.slice(boxes.indexOf(mdat)).filter((box) => box !== moov),
+  ]
   const shift = offsetOf(reordered) - before
 
   for (const stco of find([moov], "stco")) {
@@ -82,33 +90,48 @@ export async function prepare(page) {
   await page.evaluateOnNewDocument(clock)
 }
 
-// Screenshot a frame at a time, stepping the page's clock between them, so every frame is captured however slow the connection is
-async function capture(page, { duration, fps }) {
+// Screenshot a frame at a time, stepping the page's clock between them, so every frame is captured however slow the connection is.
+// PNG keeps the text sharp; frames go straight to the encoder so a long recording is not held in the worker
+async function capture(page, encoder, { duration, fps }) {
   const session = await page.createCDPSession()
-  const frames = []
+  let previous
+  let count = 0
 
-  await page.evaluate(() => {
-    window.__clock.freeze()
-    window.__clock.advance(0)
-  })
-
-  for (let frame = 0; frame < duration * fps; frame++) {
-    if (frame) {
-      await page.evaluate((ms) => window.__clock.advance(ms), 1000 / fps)
+  const flush = async () => {
+    if (!count) {
+      return
     }
 
-    const { data } = await session.send("Page.captureScreenshot", { format: "jpeg", quality: 100 })
-
-    if (frames.at(-1)?.data === data) {
-      frames.at(-1).count++
-    } else {
-      frames.push({ data, count: 1 })
-    }
+    await encoder.evaluate((data, count) => window.__encoder.add(data, count), previous, count)
+    count = 0
   }
 
-  await session.detach()
+  try {
+    await page.evaluate(() => {
+      window.__clock.freeze()
+      window.__clock.advance(0)
+    })
 
-  return frames
+    for (let frame = 0; frame < duration * fps; frame++) {
+      if (frame) {
+        await page.evaluate((ms) => window.__clock.advance(ms), 1000 / fps)
+      }
+
+      const { data } = await session.send("Page.captureScreenshot", { format: "png" })
+
+      if (data === previous) {
+        count++
+      } else {
+        await flush()
+        previous = data
+        count = 1
+      }
+    }
+
+    await flush()
+  } finally {
+    await session.detach()
+  }
 }
 
 export async function record(page, { format, width, height, duration }) {
@@ -117,20 +140,23 @@ export async function record(page, { format, width, height, duration }) {
   // H.264 needs even dimensions
   const size = format === "mp4" ? { width: width - (width % 2), height: height - (height % 2) } : { width, height }
 
-  const frames = await capture(page, { duration, fps })
+  // Encode in a blank page of its own, which keeps the recorded page's scripts away from the encoder
+  const encoder = await page.browserContext().newPage()
 
-  // Encode on a blank page so the recorded page's scripts and CSP, which can block WebAssembly, stay out of the way
-  await page.goto("about:blank")
+  try {
+    await encoder.evaluate(format === "gif" ? `(function (exports) { ${gifenc} })(window.__gifenc = {})` : h264)
+    await encoder.evaluate(encoderSource)
 
-  await page.evaluate(format === "gif" ? `(function (exports) { ${gifenc} })(window.__gifenc = {})` : h264)
-  await page.evaluate(encoder)
-  await page.evaluate((options) => window.__encoder.start(options), { format, fps, ...size })
+    await encoder.evaluate((options) => window.__encoder.start(options), { format, fps, ...size })
 
-  for (const { data, count } of frames) {
-    await page.evaluate((data, count) => window.__encoder.add(data, count), data, count)
+    // A background tab stops painting, which would leave its screenshots waiting forever
+    await page.bringToFront()
+    await capture(page, encoder, { duration, fps })
+
+    const bytes = new Uint8Array(Buffer.from(await encoder.evaluate(() => window.__encoder.finish()), "base64"))
+
+    return format === "mp4" ? optimize(bytes) : bytes
+  } finally {
+    await encoder.close()
   }
-
-  const bytes = new Uint8Array(Buffer.from(await page.evaluate(() => window.__encoder.finish()), "base64"))
-
-  return format === "mp4" ? optimize(bytes) : bytes
 }

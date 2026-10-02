@@ -15,7 +15,7 @@
 
   const call = (fn, args) => {
     try {
-      typeof fn === "function" ? fn(...args) : (0, eval)(fn)
+      typeof fn === "function" ? fn(...args) : Function(fn)()
     } catch (error) {
       console.error(error)
     }

@@ -35,14 +35,21 @@ function createPage(screenshots, result) {
     send: vi.fn(async () => ({ data: screenshots.shift() })),
     detach: vi.fn().mockResolvedValue(undefined),
   }
+  const encoderPage = {
+    close: vi.fn().mockResolvedValue(undefined),
+    evaluate: vi.fn(async (fn, ...args) => (typeof fn === "function" ? fn(...args) : undefined)),
+  }
   vi.stubGlobal("window", window)
   return {
     window,
     session,
+    encoderPage,
     createCDPSession: vi.fn().mockResolvedValue(session),
     evaluateOnNewDocument: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue(undefined),
+    bringToFront: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn(async (fn, ...args) => (typeof fn === "function" ? fn(...args) : undefined)),
+    browserContext: () => ({ newPage: async () => encoderPage }),
   }
 }
 
@@ -60,15 +67,13 @@ describe("optimize", () => {
   })
 
   it("shifts the chunk offsets by the label when moov already comes first", () => {
-    const before = moov([0])
-    const after = moov([0], colr)
-    const input = Buffer.concat([ftyp, before, mdat])
+    const dataOffset = ftyp.length + moov([0]).length + 8
+    const input = Buffer.concat([ftyp, moov([dataOffset]), mdat])
 
     const output = Buffer.from(optimize(new Uint8Array(input)))
 
-    const offset = ftyp.length + after.length + 8
+    const offset = ftyp.length + moov([0], colr).length + 8
     expect(output).toEqual(Buffer.concat([ftyp, moov([offset], colr), mdat]))
-    expect(input.subarray(ftyp.length).equals(Buffer.concat([moov([offset - colr.length]), mdat])) || true).toBe(true)
   })
 
   it("replaces an existing colour label rather than adding another", () => {
@@ -106,12 +111,14 @@ describe("record", () => {
     expect(page.window.__clock.freeze).toHaveBeenCalled()
     expect(page.window.__clock.advance.mock.calls).toEqual([[0], ...Array(9).fill([100])])
     expect(page.session.send).toHaveBeenCalledTimes(10)
-    expect(page.session.send).toHaveBeenCalledWith("Page.captureScreenshot", { format: "jpeg", quality: 100 })
+    expect(page.session.send).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png" })
     expect(page.session.detach).toHaveBeenCalled()
-    expect(page.goto).toHaveBeenCalledWith("about:blank")
-    expect(page.evaluate).toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
-    expect(page.evaluate).not.toHaveBeenCalledWith("h264-source")
-    expect(page.evaluate).toHaveBeenCalledWith("encoder-source")
+    expect(page.goto).not.toHaveBeenCalled()
+    expect(page.encoderPage.close).toHaveBeenCalled()
+    expect(page.bringToFront.mock.invocationCallOrder[0]).toBeLessThan(page.session.send.mock.invocationCallOrder[0])
+    expect(page.encoderPage.evaluate).toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
+    expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith("h264-source")
+    expect(page.encoderPage.evaluate).toHaveBeenCalledWith("encoder-source")
     expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "gif", fps: 10, width: 1281, height: 721 })
     expect(page.window.__encoder.add.mock.calls).toEqual([
       ["a", 3],
@@ -119,7 +126,7 @@ describe("record", () => {
     ])
   })
 
-  it("records an MP4 at even dimensions and optimizes it", async () => {
+  it("records an MP4 with the bundled encoder at even dimensions and optimizes it", async () => {
     const ftyp = box("ftyp", 0)
     const mdat = box("mdat", 0)
     const page = createPage(Array(60).fill("a"), Buffer.concat([ftyp, mdat, moov([ftyp.length + 8])]).toString("base64"))
@@ -127,8 +134,8 @@ describe("record", () => {
     const bytes = await record(page, { format: "mp4", width: 1281, height: 721, duration: 2 })
 
     expect(Buffer.from(bytes)).toEqual(Buffer.concat([ftyp, moov([ftyp.length + 8 + moov([0], colr).length], colr), mdat]))
-    expect(page.evaluate).toHaveBeenCalledWith("h264-source")
-    expect(page.evaluate).not.toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
+    expect(page.encoderPage.evaluate).toHaveBeenCalledWith("h264-source")
+    expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
     expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "mp4", fps: 30, width: 1280, height: 720 })
     expect(page.window.__encoder.add.mock.calls).toEqual([["a", 60]])
   })

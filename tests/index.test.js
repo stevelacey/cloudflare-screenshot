@@ -1,13 +1,14 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import worker, { Browser } from "../src/index.js"
-import { record } from "../src/video.js"
+import { prepare, record } from "../src/video.js"
 
 vi.mock("@cloudflare/puppeteer", () => ({
   default: { launch: vi.fn() },
 }))
 
 vi.mock("../src/video.js", () => ({
+  prepare: vi.fn().mockResolvedValue(undefined),
   record: vi.fn().mockResolvedValue("video-bytes"),
 }))
 
@@ -230,7 +231,7 @@ describe("Browser", () => {
       url: "https://example.com/screenshot/foo/bar",
     })
 
-    expect(puppeteer.launch).toHaveBeenCalledWith(env.MYBROWSER)
+    expect(puppeteer.launch).toHaveBeenCalledWith(env.MYBROWSER, { keep_alive: 600000 })
     expect(instance.page.setViewport).toHaveBeenCalledWith({
       width: 1280,
       height: 720,
@@ -296,6 +297,8 @@ describe("Browser", () => {
       url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4",
     })
 
+    expect(prepare).toHaveBeenCalledWith(instance.page)
+    expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(instance.page.goto.mock.invocationCallOrder[0])
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
     expect(record).toHaveBeenCalledWith(instance.page, { format: "mp4", width: 2400, height: 1260, duration: 20 })
     expect(instance.page.screenshot).not.toHaveBeenCalled()

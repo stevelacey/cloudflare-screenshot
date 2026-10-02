@@ -1,4 +1,4 @@
-// Injected into the browser as text to encode screencast frames, where decoding and encoding are cheap
+// Injected into the browser as text to encode captured frames. Decoding and encoding stay in the page, where they are cheap
 const toBase64 = (bytes) => {
   let binary = ""
 
@@ -9,14 +9,20 @@ const toBase64 = (bytes) => {
   return btoa(binary)
 }
 
-// x264's own RGB conversion uses BT.601, which players show with shifted colours, so convert to BT.709 limited range here
+const byte = (value) => Math.min(255, Math.max(0, Math.round(value)))
+
+// The bundled encoder's built-in conversion is BT.601, which players show with shifted colours, so convert to BT.709 limited range here
 const toYuv = (rgba, width, height) => {
   const yuv = new Uint8Array((width * height * 3) / 2)
   const u = width * height
   const v = u + u / 4
 
   for (let i = 0; i < width * height; i++) {
-    yuv[i] = 16 + ((0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2]) * 219) / 255
+    const r = rgba[i * 4]
+    const g = rgba[i * 4 + 1]
+    const b = rgba[i * 4 + 2]
+
+    yuv[i] = byte(16 + ((0.2126 * r + 0.7152 * g + 0.0722 * b) * 219) / 255)
   }
 
   for (let y = 0; y < height; y += 2) {
@@ -34,39 +40,51 @@ const toYuv = (rgba, width, height) => {
       const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
       const j = (y / 2) * (width / 2) + x / 2
 
-      yuv[u + j] = 128 + ((b - luma) / 1.8556) * (224 / 255)
-      yuv[v + j] = 128 + ((r - luma) / 1.5748) * (224 / 255)
+      yuv[u + j] = byte(128 + ((b - luma) / 1.8556) * (224 / 255))
+      yuv[v + j] = byte(128 + ((r - luma) / 1.5748) * (224 / 255))
     }
   }
 
   return yuv
 }
 
+const decode = (data) => {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+
+  return bytes
+}
+
 window.__encoder = {
   async start({ format, width, height, fps }) {
     this.fps = fps
-    this.canvas = new OffscreenCanvas(width, height)
-    this.context = this.canvas.getContext("2d", { willReadFrequently: true })
 
     if (format === "gif") {
       this.gif = window.__gifenc.GIFEncoder()
-
-      return
+    } else {
+      // Chrome's own H.264 encoder ignores bitrate and blurs text, so use the bundled x264 at its sharpest settings
+      this.h264 = await window.HME.createH264MP4Encoder()
+      Object.assign(this.h264, { width, height, frameRate: fps, quantizationParameter: 10, speed: 0, groupOfPictures: fps * 2 })
+      this.h264.initialize()
     }
 
-    // x264 rather than WebCodecs, as Chrome's H.264 encoder ignores bitrate and looks soft
-    this.h264 = await window.HME.createH264MP4Encoder()
-
-    Object.assign(this.h264, { width, height, frameRate: fps, quantizationParameter: 16, speed: 5, groupOfPictures: fps * 2 })
-
-    this.h264.initialize()
+    this.canvas = new OffscreenCanvas(width, height)
+    this.context = this.canvas.getContext("2d", { willReadFrequently: true })
+    this.context.imageSmoothingEnabled = false
   },
 
   async add(data, count) {
-    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
-    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }))
+    const bitmap = await createImageBitmap(new Blob([decode(data)], { type: "image/png" }))
+    const cropWidth = Math.min(bitmap.width, this.canvas.width)
+    const cropHeight = Math.min(bitmap.height, this.canvas.height)
 
-    this.context.drawImage(bitmap, 0, 0, this.canvas.width, this.canvas.height)
+    // Crop a stray odd pixel instead of resampling the whole frame
+    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    this.context.drawImage(bitmap, 0, 0, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
     bitmap.close()
 
     const { width, height } = this.canvas
@@ -74,6 +92,7 @@ window.__encoder = {
 
     if (this.gif) {
       const { quantize, applyPalette } = window.__gifenc
+
       const palette = quantize(rgba, 256)
 
       this.gif.writeFrame(applyPalette(rgba, palette), width, height, { palette, delay: (count * 1000) / this.fps })
