@@ -17,7 +17,7 @@ const URL_PATTERN = regexMerge(
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
   /(?:\/(?<duration>[1-9]|[12][0-9]|30)s)?/,
   /(?<path>\/.*?)/,
-  /(?:@(?<scale>[2-4])x)?/,
+  /(?:@(?:(?<scale>[2-4])x|(?<resolution>240|360|480|720|1080|1440|2160)p|(?<uhd>4k)))?/,
   /(?:\.(?<format>(gif|mp4|pdf|png|webp)))?/,
   /(?<query>\?.*)?$/,
 )
@@ -25,7 +25,20 @@ const VIDEO_FORMATS = ["gif", "mp4", "webp"]
 
 const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 
-function cacheKey({ base, duration, format, path, query, width, height, scale }) {
+function outputSize({ resolution, scale, uhd }) {
+  // 4k is another name for 2160p, so both share one file
+  if (uhd || resolution === "2160") {
+    return "@4k"
+  }
+
+  if (resolution) {
+    return `@${resolution}p`
+  }
+
+  return scale ? `@${scale}x` : ""
+}
+
+function cacheKey({ base, duration, format, path, query, resolution, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -33,7 +46,7 @@ function cacheKey({ base, duration, format, path, query, width, height, scale })
     path,
     width && height ? `-${width}x${height}` : "",
     duration ? `-${duration}s` : "",
-    scale ? `@${scale}x` : "",
+    outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
     query,
   ]
@@ -102,14 +115,21 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, duration, format, path, width, height, scale } = {
+    const { base, duration, format, path, resolution, width, height, scale } = {
       ...settings,
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
       format: settings.format ?? DEFAULT_FORMAT,
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
       height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
       scale: parseInt(settings.scale ?? DEFAULT_SCALE, 10),
+      resolution: settings.uhd ? 2160 : settings.resolution && parseInt(settings.resolution, 10),
     }
+
+    // A resolution sets the output height, keeping the page laid out at its own size. Larger output renders at a higher pixel
+    // density; smaller output has Chrome draw each frame at that size, which keeps text crisper than shrinking it afterwards
+    const zoom = resolution ? resolution / height : scale
+    const shrink = Math.min(zoom, 1)
+    const output = { width: Math.round(width * zoom), height: Math.round(height * zoom) }
 
     const params = [
       ...(settings.query ? settings.query.replace(/^\?/, "").split("&") : []),
@@ -145,7 +165,7 @@ export class Browser {
         })
       }
 
-      await page.setViewport({ width, height, deviceScaleFactor: scale })
+      await page.setViewport({ width, height, deviceScaleFactor: Math.max(zoom, 1) })
 
       if (VIDEO_FORMATS.includes(format)) {
         await prepare(page)
@@ -159,7 +179,7 @@ export class Browser {
       }
 
       if (VIDEO_FORMATS.includes(format)) {
-        screenshot = await record(page, { format, width: width * scale, height: height * scale, duration })
+        screenshot = await record(page, { format, ...output, duration, clip: shrink < 1 ? { x: 0, y: 0, width, height, scale: shrink } : undefined })
       } else if (format === "pdf") {
         screenshot = await page.pdf({
           format: "A4",
@@ -167,7 +187,7 @@ export class Browser {
         })
       } else {
         screenshot = await page.screenshot({
-          clip: { width, height, x: 0, y: 0 },
+          clip: { width, height, x: 0, y: 0, scale: shrink },
         })
       }
     } catch (e) {

@@ -138,6 +138,16 @@ describe("record", () => {
     expect(page.window.__encoder.add.mock.calls).toEqual([["a", 15]])
   })
 
+  it("captures frames at the size given by the clip", async () => {
+    const page = createPage(["a"], base64("webp-bytes"))
+    const clip = { x: 0, y: 0, width: 1280, height: 720, scale: 0.5 }
+
+    await record(page, { format: "webp", width: 640, height: 360, duration: 1 / 15, clip })
+
+    expect(page.session.send).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, width: 640, height: 360 })
+  })
+
   it("records an MP4 with the bundled encoder at even dimensions and optimizes it", async () => {
     const ftyp = box("ftyp", 0)
     const mdat = box("mdat", 0)

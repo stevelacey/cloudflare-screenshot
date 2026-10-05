@@ -175,6 +175,20 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-1200x630-20s@2x.mp4")
   })
 
+  it("includes resolution in the cache key, storing 2160p and 4k as one file", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/1200x630/3s/foo/bar@480p.webp" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/foo/bar@2160p.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/foo/bar@4k.png" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([
+      ["example.com/foo/bar-1200x630-3s@480p.webp"],
+      ["example.com/foo/bar@4k.png"],
+      ["example.com/foo/bar@4k.png"],
+    ])
+  })
+
   it("includes scale in the cache key", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
@@ -250,7 +264,7 @@ describe("Browser", () => {
     })
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
     expect(instance.page.screenshot).toHaveBeenCalledWith({
-      clip: { width: 1280, height: 720, x: 0, y: 0 },
+      clip: { width: 1280, height: 720, x: 0, y: 0, scale: 1 },
     })
     expect(instance.page.pdf).not.toHaveBeenCalled()
     expect(instance.page.setExtraHTTPHeaders).not.toHaveBeenCalled()
@@ -324,6 +338,39 @@ describe("Browser", () => {
     expect(instance.page.screenshot).not.toHaveBeenCalled()
     expect(response.headers.get("Content-Type")).toBe("video/mp4")
     expect(await response.text()).toBe("mp4-bytes")
+  })
+
+  it("draws a smaller resolution at that size, keeping the page's layout", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar@480p.png" })
+
+    expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 1 })
+    expect(instance.page.screenshot).toHaveBeenCalledWith({ clip: { width: 1280, height: 720, x: 0, y: 0, scale: 480 / 720 } })
+  })
+
+  it("records a smaller resolution at that size", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/1200x630/3s/foo/bar@360p.mp4" })
+
+    expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1200, height: 630, deviceScaleFactor: 1 })
+    expect(record).toHaveBeenCalledWith(instance.page, {
+      format: "mp4",
+      width: 686,
+      height: 360,
+      duration: 3,
+      clip: { x: 0, y: 0, width: 1200, height: 630, scale: 360 / 630 },
+    })
+  })
+
+  it("renders a larger resolution at a higher pixel density", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar@1080p.mp4" })
+
+    expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 1.5 })
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "mp4", width: 1920, height: 1080, duration: 5, clip: undefined })
+  })
+
+  it("treats 4k as 2160p", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar@4k.png" })
+
+    expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 3 })
   })
 
   it("records a GIF for five seconds by default", async () => {

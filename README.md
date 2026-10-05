@@ -43,6 +43,8 @@ To screenshot your homepage, request `home.png`, which captures `/`, e.g., `scre
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 
+Or, in the same place, give a resolution: `@240p`, `@360p`, `@480p`, `@720p`, `@1080p`, `@1440p`, or `@2160p` (also `@4k`). It sets the output height without changing how the page is laid out, and the width follows the page's shape, e.g., `screenshots/path/to/something@360p.mp4` is 640x360. MP4s need even dimensions, so `@480p` of a 1280x720 page comes out 852x480.
+
 Videos are recorded by requesting `.mp4`, `.webp` or `.gif` instead, e.g., `screenshots/path/to/something.mp4`. They run for 5 seconds by default, and you can choose anywhere from 1 to 30 seconds via the URL, after any dimensions, e.g., `screenshots/1200x630/20s/path/to/something.mp4`. Recording starts once the page has loaded, so loop any animations you want to capture or delay their start. MP4s are H.264 at 30fps. Animated WebPs are 15fps, for animated previews like YouTube's, and GIFs are 10fps; both are much larger, so you may want to keep them small, e.g., `screenshots/320x180/3s/path/to/something.webp`.
 
 If you want to configure some query params to always pass through to your backend, you can set the `QUERY_PARAMS` environment variable and they will be appended to every webserver request.
@@ -62,10 +64,10 @@ You’ll probably want meta tags something like these:
 And for a video card:
 
 ```html
-<meta property="og:video" content="https://steve.ly/screenshots/home.mp4?dark=on">
+<meta property="og:video" content="https://steve.ly/screenshots/home@360p.mp4?dark=on">
 <meta property="og:video:type" content="video/mp4">
-<meta property="og:video:width" content="1280">
-<meta property="og:video:height" content="720">
+<meta property="og:video:width" content="640">
+<meta property="og:video:height" content="360">
 ```
 
 

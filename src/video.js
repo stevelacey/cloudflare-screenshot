@@ -89,7 +89,7 @@ export async function prepare(page) {
   await page.evaluateOnNewDocument(clock)
 }
 
-async function capture(page, encoder, { duration, fps }) {
+async function capture(page, encoder, { clip, duration, fps }) {
   const session = await page.createCDPSession()
   let previous
   let count = 0
@@ -118,7 +118,7 @@ async function capture(page, encoder, { duration, fps }) {
         await page.evaluate((ms) => window.__clock.advance(ms), 1000 / fps)
       }
 
-      const { data } = await session.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true })
+      const { data } = await session.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip })
 
       if (data === previous) {
         count++
@@ -136,7 +136,7 @@ async function capture(page, encoder, { duration, fps }) {
   }
 }
 
-export async function record(page, { format, width, height, duration }) {
+export async function record(page, { format, width, height, duration, clip }) {
   const fps = FRAME_RATES[format]
 
   // H.264 needs even dimensions
@@ -155,7 +155,7 @@ export async function record(page, { format, width, height, duration }) {
 
     // Background tabs stop painting, which stalls screenshots
     await page.bringToFront()
-    await capture(page, encoder, { duration, fps })
+    await capture(page, encoder, { clip, duration, fps })
 
     const bytes = new Uint8Array(Buffer.from(await encoder.evaluate(() => window.__encoder.finish()), "base64"))
 
