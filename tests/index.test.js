@@ -335,6 +335,15 @@ describe("Browser", () => {
     expect(response.headers.get("Content-Type")).toBe("image/gif")
   })
 
+  it("records an animated WebP", async () => {
+    vi.mocked(record).mockResolvedValue("webp-bytes")
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.webp" })
+
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "webp", width: 1280, height: 720, duration: 5 })
+    expect(response.headers.get("Content-Type")).toBe("image/webp")
+  })
+
   it("treats durations over 30 seconds as part of the path", async () => {
     await browser.fetch({ url: "https://example.com/screenshot/60s/foo/bar.mp4" })
 

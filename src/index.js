@@ -5,7 +5,7 @@ import { prepare, record } from "./video"
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
 const BROWSER_IDLE_LIMIT = 10 * 60 * 1000
 const BROWSER_KEEP_ALIVE = 5
-const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png" }
+const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png", webp: "image/webp" }
 const DEFAULT_DURATION = 5
 const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
@@ -18,10 +18,10 @@ const URL_PATTERN = regexMerge(
   /(?:\/(?<duration>[1-9]|[12][0-9]|30)s)?/,
   /(?<path>\/.*?)/,
   /(?:@(?<scale>[2-4])x)?/,
-  /(?:\.(?<format>(gif|mp4|pdf|png)))?/,
+  /(?:\.(?<format>(gif|mp4|pdf|png|webp)))?/,
   /(?<query>\?.*)?$/,
 )
-const VIDEO_FORMATS = ["gif", "mp4"]
+const VIDEO_FORMATS = ["gif", "mp4", "webp"]
 
 const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 

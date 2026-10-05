@@ -5,7 +5,9 @@ import h264 from "./h264.browser.js"
 
 const CONTAINERS = { moov: 0, trak: 0, mdia: 0, minf: 0, stbl: 0, stsd: 8, avc1: 78 }
 
-const FRAME_RATES = { gif: 10, mp4: 30 }
+const FRAME_RATES = { gif: 10, mp4: 30, webp: 15 }
+
+const LIBRARIES = { gif: `(function (exports) { ${gifenc} })(window.__gifenc = {})`, mp4: h264 }
 
 function parse(bytes) {
   const boxes = []
@@ -143,7 +145,10 @@ export async function record(page, { format, width, height, duration }) {
   const encoder = await page.browserContext().newPage()
 
   try {
-    await encoder.evaluate(format === "gif" ? `(function (exports) { ${gifenc} })(window.__gifenc = {})` : h264)
+    if (LIBRARIES[format]) {
+      await encoder.evaluate(LIBRARIES[format])
+    }
+
     await encoder.evaluate(encoderSource)
 
     await encoder.evaluate((options) => window.__encoder.start(options), { format, fps, ...size })

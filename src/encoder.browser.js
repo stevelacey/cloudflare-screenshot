@@ -58,12 +58,66 @@ const decode = (data) => {
   return bytes
 }
 
+const fourcc = (type) => Uint8Array.from(type, (char) => char.charCodeAt(0))
+
+const uint = (value, bytes) => Uint8Array.from({ length: bytes }, (_, i) => (value >> (i * 8)) & 0xff)
+
+const join = (parts) => {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+  let offset = 0
+
+  for (const part of parts) {
+    output.set(part, offset)
+    offset += part.length
+  }
+
+  return output
+}
+
+const chunk = (type, ...parts) => {
+  const data = join(parts)
+
+  return join([fourcc(type), uint(data.length, 4), data, new Uint8Array(data.length % 2)])
+}
+
+// Wraps each frame's still WebP chunks into an animation that loops forever
+const animate = (frames, width, height) => {
+  const images = frames.map(({ data, duration }) => {
+    const chunks = []
+
+    for (let offset = 12; offset < data.length; ) {
+      const size = new DataView(data.buffer, data.byteOffset + offset + 4).getUint32(0, true)
+
+      chunks.push({ type: String.fromCharCode(...data.subarray(offset, offset + 4)), bytes: data.subarray(offset, offset + 8 + size + (size % 2)) })
+      offset += 8 + size + (size % 2)
+    }
+
+    // Frames may only hold image data; Chrome also adds a header and an sRGB profile
+    return { chunks: chunks.filter(({ type }) => ["ALPH", "VP8 ", "VP8L"].includes(type)), duration }
+  })
+  const alpha = images.some(({ chunks }) => chunks.some(({ type }) => type === "ALPH"))
+  const size = [uint(width - 1, 3), uint(height - 1, 3)]
+  const body = join([
+    fourcc("WEBP"),
+    chunk("VP8X", uint(alpha ? 0x12 : 0x02, 4), ...size),
+    chunk("ANIM", uint(0, 4), uint(0, 2)),
+    ...images.map(({ chunks, duration }) =>
+      chunk("ANMF", uint(0, 3), uint(0, 3), ...size, uint(duration, 3), uint(0x02, 1), ...chunks.map(({ bytes }) => bytes)),
+    ),
+  ])
+
+  return join([fourcc("RIFF"), uint(body.length, 4), body])
+}
+
 window.__encoder = {
   async start({ format, width, height, fps }) {
     this.fps = fps
+    this.elapsed = 0
 
     if (format === "gif") {
       this.gif = window.__gifenc.GIFEncoder()
+    } else if (format === "webp") {
+      this.webp = []
     } else {
       this.h264 = await window.HME.createH264MP4Encoder()
       Object.assign(this.h264, { width, height, frameRate: fps, quantizationParameter: 10, speed: 0, groupOfPictures: fps * 2 })
@@ -71,14 +125,26 @@ window.__encoder = {
     }
 
     this.canvas = new OffscreenCanvas(width, height)
-    this.context = this.canvas.getContext("2d", { willReadFrequently: true })
+    this.context = this.canvas.getContext("2d", { alpha: false, willReadFrequently: true })
   },
 
   async add(data, count) {
     const bitmap = await createImageBitmap(new Blob([decode(data)], { type: "image/png" }))
+    // Whole milliseconds that add up to the true running time
+    const duration = Math.round(((this.elapsed + count) * 1000) / this.fps) - Math.round((this.elapsed * 1000) / this.fps)
+
+    this.elapsed += count
 
     this.context.drawImage(bitmap, 0, 0)
     bitmap.close()
+
+    if (this.webp) {
+      const blob = await this.canvas.convertToBlob({ type: "image/webp", quality: 0.9 })
+
+      this.webp.push({ data: new Uint8Array(await blob.arrayBuffer()), duration })
+
+      return
+    }
 
     const { width, height } = this.canvas
     const { data: rgba } = this.context.getImageData(0, 0, width, height)
@@ -88,7 +154,7 @@ window.__encoder = {
 
       const palette = quantize(rgba, 256)
 
-      this.gif.writeFrame(applyPalette(rgba, palette), width, height, { palette, delay: (count * 1000) / this.fps })
+      this.gif.writeFrame(applyPalette(rgba, palette), width, height, { palette, delay: duration })
 
       return
     }
@@ -105,6 +171,10 @@ window.__encoder = {
       this.gif.finish()
 
       return toBase64(this.gif.bytes())
+    }
+
+    if (this.webp) {
+      return toBase64(animate(this.webp, this.canvas.width, this.canvas.height))
     }
 
     this.h264.finalize()

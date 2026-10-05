@@ -126,6 +126,18 @@ describe("record", () => {
     ])
   })
 
+  it("records a WebP without loading an encoder library", async () => {
+    const page = createPage(Array(15).fill("a"), base64("webp-bytes"))
+
+    const bytes = await record(page, { format: "webp", width: 1281, height: 721, duration: 1 })
+
+    expect(Buffer.from(bytes).toString()).toBe("webp-bytes")
+    expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith("h264-source")
+    expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, width: 1281, height: 721 })
+    expect(page.window.__encoder.add.mock.calls).toEqual([["a", 15]])
+  })
+
   it("records an MP4 with the bundled encoder at even dimensions and optimizes it", async () => {
     const ftyp = box("ftyp", 0)
     const mdat = box("mdat", 0)
