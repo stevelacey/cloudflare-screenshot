@@ -11,7 +11,12 @@ const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
 const DEFAULT_SCALE = 1
-const OPTIONS = { duration: /^([1-9]|[12][0-9]|30)s$/, scroll: /^([\w-]+(?:;[\w-]+){0,19})$/ }
+const OPTIONS = {
+  duration: /^([1-9]|[12][0-9]|30)s$/,
+  fps: /^([1-9]|[12][0-9]|30)$/,
+  quality: /^([1-9][0-9]?|100)$/,
+  scroll: /^([\w-]+(?:;[\w-]+){0,19})$/,
+}
 const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
@@ -23,6 +28,8 @@ const URL_PATTERN = regexMerge(
   /(?<query>\?.*)?$/,
 )
 const VIDEO_FORMATS = ["gif", "mp4", "webp"]
+// GIFs have no quality setting, their size comes from the palette, and nor do PNGs or PDFs
+const QUALITY_FORMATS = ["mp4", "webp"]
 
 const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 
@@ -54,10 +61,14 @@ function settingsFor(url) {
     settings[name] = match[1]
   }
 
+  if (settings.quality && !QUALITY_FORMATS.includes(settings.format)) {
+    return null
+  }
+
   return settings
 }
 
-function cacheKey({ base, duration, format, path, query, resolution, scroll, width, height, scale, uhd }) {
+function cacheKey({ base, duration, format, fps, path, quality, query, resolution, scroll, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -65,6 +76,8 @@ function cacheKey({ base, duration, format, path, query, resolution, scroll, wid
     path,
     width && height ? `-${width}x${height}` : "",
     duration ? `-${duration}s` : "",
+    fps ? `-${fps}fps` : "",
+    quality ? `-q${quality}` : "",
     scroll ? `-to-${scroll}` : "",
     outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
@@ -136,10 +149,12 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, duration, format, path, resolution, scroll, width, height, scale } = {
+    const { base, duration, format, fps, path, quality, resolution, scroll, width, height, scale } = {
       ...settings,
       scroll: settings.scroll?.split(";"),
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
+      fps: settings.fps && parseInt(settings.fps, 10),
+      quality: settings.quality && parseInt(settings.quality, 10),
       format: settings.format ?? DEFAULT_FORMAT,
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
       height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
@@ -188,7 +203,7 @@ export class Browser {
     let screenshot
 
     try {
-      const options = { duration, external, format, height, output, scroll, shrink, width, zoom }
+      const options = { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }
 
       // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
       screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
@@ -258,7 +273,7 @@ export class Browser {
   }
 
   // Each attempt gets a fresh context, so nothing from a failed one carries over
-  async render(url, { duration, external, format, height, output, scroll, shrink, width, zoom }) {
+  async render(url, { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }) {
     const context = await this.browser.createBrowserContext()
 
     try {
@@ -288,7 +303,15 @@ export class Browser {
       await page.waitForNetworkIdle()
 
       if (VIDEO_FORMATS.includes(format)) {
-        return await record(page, { format, ...output, duration, scroll, clip: shrink < 1 ? { x: 0, y: 0, width, height, scale: shrink } : undefined })
+        return await record(page, {
+          format,
+          ...output,
+          duration,
+          fps,
+          quality,
+          scroll,
+          clip: shrink < 1 ? { x: 0, y: 0, width, height, scale: shrink } : undefined,
+        })
       }
 
       if (format === "pdf") {

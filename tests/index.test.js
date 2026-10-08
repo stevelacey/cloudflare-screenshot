@@ -182,6 +182,25 @@ describe("worker.fetch", () => {
     ])
   })
 
+  it("includes fps and quality in the cache key", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/quality=60,fps=8,duration=10s/foo/bar@480p.webp" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/fps=15/foo/bar.gif" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-10s-8fps-q60@480p.webp"], ["example.com/foo/bar-15fps.gif"]])
+  })
+
+  it("returns a 404 for quality on formats without it", async () => {
+    for (const format of ["gif", "png", "pdf"]) {
+      const response = await worker.fetch({ url: `https://example.com/screenshot/quality=50/foo/bar.${format}` }, env, ctx)
+
+      expect(response.status).toBe(404)
+    }
+
+    expect(env.SCREENSHOTS.get).not.toHaveBeenCalled()
+  })
+
   it("returns a 404 for options that don't exist or are out of range", async () => {
     for (const options of [
       "duration=60s",
@@ -194,6 +213,11 @@ describe("worker.fetch", () => {
       "speed=2s",
       "constructor=1",
       "duration=2s,zoom=2",
+      "fps=0",
+      "fps=31",
+      "fps=15fps",
+      "quality=0",
+      "quality=101",
     ]) {
       const response = await worker.fetch({ url: `https://example.com/screenshot/${options}/foo/bar.mp4` }, env, ctx)
 
@@ -478,6 +502,12 @@ describe("Browser", () => {
 
     expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1200, height: 630, deviceScaleFactor: 1 })
     expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ duration: 8, scroll: ["2026", "2000px", "0px"] }))
+  })
+
+  it("records at the requested frame rate and quality", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/fps=8,quality=60/foo/bar.webp" })
+
+    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ format: "webp", fps: 8, quality: 60 }))
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {

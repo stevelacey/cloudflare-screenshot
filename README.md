@@ -69,7 +69,7 @@ You’ll probably want meta tags something like these:
 Videos
 ------
 
-Request `.mp4`, `.webp` or `.gif` to record the page, e.g., `screenshots/path/to/something.mp4`. Recording starts once the page has loaded, so loop any animations you want to capture. MP4s are H.264 at 30fps; animated WebPs (15fps) and GIFs (10fps) are much larger, so keep those small.
+Request `.mp4`, `.webp` or `.gif` to record the page, e.g., `screenshots/path/to/something.mp4`. Recording starts once the page has loaded, so loop any animations you want to capture. MP4s are H.264; animated WebPs and GIFs are much larger, so keep those small.
 
 Append a resolution to the filename to set the video's size, from `@240p`, `@360p`, `@480p`, `@720p`, `@1080p`, `@1440p` or `@4k`, e.g., `screenshots/path/to/something@480p.mp4`. The page is laid out at its usual size and the width follows its shape, so `@480p` of a 1280x720 page is 854x480.
 
@@ -78,12 +78,14 @@ Options go after any dimensions, separated by commas, e.g., `screenshots/1024x76
 | Option | Example | Default | |
 | :-- | :-- | :-- | :-- |
 | `duration` | `duration=10s` | `5s` | How long to record, up to 30 seconds |
+| `fps` | `fps=8` | `30` for MP4, `15` for WebP, `10` for GIF | Frames per second, up to 30; fewer record faster and make smaller files |
+| `quality` | `quality=60` | `80` | From 1 to 100, for MP4 and WebP |
 | `scroll` | `scroll=features;pricing` | None | Element ids or positions like `2000px` to scroll to in turn, pausing at the top and at each one |
 
 Scrolling to an element respects its `scroll-margin-top`, and positions are from the top, so `scroll=2000px;0px` scrolls down and back up.
 
-| [![Travels](https://steve.ly/screenshots/travels@480p.webp?dark=on)](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [🎬 MP4](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/travels@480p.webp?dark=on)<br>5 seconds at 854x480 | [![Travels](https://steve.ly/screenshots/duration=10s/travels@240p.webp?dark=on)](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s/travels@240p.webp?dark=on)<br>10 seconds | [![Travels](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@240p.webp?dark=on)](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@240p.webp?dark=on)<br>10 seconds, scrolling to `#2026`, `#2025` and then `#2024` |
-| :-- | :-- | :-- |
+| [![Travels](https://steve.ly/screenshots/travels@480p.webp?dark=on)](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50,scroll=2026;2025;2024/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.webp?dark=on) |
+| --: | --: | --: |
 
 For a video card, add tags like these:
 

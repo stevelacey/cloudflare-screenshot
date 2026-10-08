@@ -110,8 +110,9 @@ const animate = (frames, width, height) => {
 }
 
 window.__encoder = {
-  async start({ format, width, height, fps }) {
+  async start({ format, width, height, fps, quality }) {
     this.fps = fps
+    this.quality = quality
     this.elapsed = 0
 
     if (format === "gif") {
@@ -120,7 +121,9 @@ window.__encoder = {
       this.webp = []
     } else {
       this.h264 = await window.HME.createH264MP4Encoder()
-      Object.assign(this.h264, { width, height, frameRate: fps, quantizationParameter: 10, speed: 0, groupOfPictures: fps * 2 })
+      // Quality 100 is a quantizer of 10, which is near lossless, rising to 50 at quality 0
+      const quantizationParameter = Math.round(10 + (100 - quality) * 0.4)
+      Object.assign(this.h264, { width, height, frameRate: fps, quantizationParameter, speed: 0, groupOfPictures: fps * 2 })
       this.h264.initialize()
     }
 
@@ -139,7 +142,7 @@ window.__encoder = {
     bitmap.close()
 
     if (this.webp) {
-      const blob = await this.canvas.convertToBlob({ type: "image/webp", quality: 0.9 })
+      const blob = await this.canvas.convertToBlob({ type: "image/webp", quality: this.quality / 100 })
 
       this.webp.push({ data: new Uint8Array(await blob.arrayBuffer()), duration })
 

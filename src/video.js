@@ -7,6 +7,8 @@ const CONTAINERS = { moov: 0, trak: 0, mdia: 0, minf: 0, stbl: 0, stsd: 8, avc1:
 
 const FRAME_RATES = { gif: 10, mp4: 30, webp: 15 }
 
+const QUALITY = 80
+
 const LIBRARIES = { gif: `(function (exports) { ${gifenc} })(window.__gifenc = {})`, mp4: h264 }
 
 function parse(bytes) {
@@ -232,9 +234,7 @@ async function capture(page, encoder, { clip, duration, fps, parts }) {
   }
 }
 
-export async function record(page, { format, width, height, duration, clip, scroll }) {
-  const fps = FRAME_RATES[format]
-
+export async function record(page, { format, width, height, duration, clip, fps = FRAME_RATES[format], quality = QUALITY, scroll }) {
   // H.264 needs even dimensions
   const size = format === "mp4" ? { width: width - (width % 2), height: height - (height % 2) } : { width, height }
 
@@ -247,7 +247,7 @@ export async function record(page, { format, width, height, duration, clip, scro
 
     await encoder.evaluate(encoderSource)
 
-    await encoder.evaluate((options) => window.__encoder.start(options), { format, fps, ...size })
+    await encoder.evaluate((options) => window.__encoder.start(options), { format, fps, quality, ...size })
 
     // Background tabs stop painting, which stalls screenshots
     await page.bringToFront()
