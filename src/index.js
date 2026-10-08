@@ -11,11 +11,12 @@ const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
 const DEFAULT_SCALE = 1
+const OPTIONS = { duration: /^([1-9]|[12][0-9]|30)s$/, scroll: /^([\w-]+(?:;[\w-]+){0,19})$/ }
 const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
-  /(?:\/(?<duration>[1-9]|[12][0-9]|30)s)?/,
+  /(?:\/(?<options>[a-z]+=[\w.;-]+(?:,[a-z]+=[\w.;-]+)*))?/,
   /(?<path>\/.*?)/,
   /(?:@(?:(?<scale>[2-4])x|(?<resolution>240|360|480|720|1080|1440|2160)p|(?<uhd>4k)))?/,
   /(?:\.(?<format>(gif|mp4|pdf|png|webp)))?/,
@@ -38,7 +39,25 @@ function outputSize({ resolution, scale, uhd }) {
   return scale ? `@${scale}x` : ""
 }
 
-function cacheKey({ base, duration, format, path, query, resolution, width, height, scale, uhd }) {
+// The URL's parts, with options like duration=8s,scroll=2026;2025, or null when any option is unknown or invalid
+function settingsFor(url) {
+  const settings = { ...url.match(URL_PATTERN).groups }
+
+  for (const option of settings.options?.split(",") ?? []) {
+    const [name, value] = option.split("=")
+    const match = Object.hasOwn(OPTIONS, name) && value.match(OPTIONS[name])
+
+    if (!match) {
+      return null
+    }
+
+    settings[name] = match[1]
+  }
+
+  return settings
+}
+
+function cacheKey({ base, duration, format, path, query, resolution, scroll, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -46,6 +65,7 @@ function cacheKey({ base, duration, format, path, query, resolution, width, heig
     path,
     width && height ? `-${width}x${height}` : "",
     duration ? `-${duration}s` : "",
+    scroll ? `-to-${scroll}` : "",
     outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
     query,
@@ -65,10 +85,10 @@ async function serveScreenshot(body, format) {
 
 export default {
   async fetch(request, env, ctx) {
-    const settings = request.url.match(URL_PATTERN).groups
+    const settings = settingsFor(request.url)
 
-    // Nothing to screenshot at the root
-    if (settings.path === "/") {
+    // Nothing to screenshot at the root, or with options that don't exist
+    if (!settings || settings.path === "/") {
       return new Response(null, { status: 404 })
     }
 
@@ -97,11 +117,12 @@ export class Browser {
     this.env = env
     this.pending = 0
     this.inflight = new Map()
+    this.recordings = Promise.resolve()
     this.storage = this.state.storage
   }
 
   async fetch(request) {
-    const settings = request.url.match(URL_PATTERN).groups
+    const settings = settingsFor(request.url)
     const key = cacheKey(settings)
 
     if (!this.inflight.has(key)) {
@@ -115,8 +136,9 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, duration, format, path, resolution, width, height, scale } = {
+    const { base, duration, format, path, resolution, scroll, width, height, scale } = {
       ...settings,
+      scroll: settings.scroll?.split(";"),
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
       format: settings.format ?? DEFAULT_FORMAT,
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
@@ -127,76 +149,59 @@ export class Browser {
 
     // A resolution sets the output height, keeping the page laid out at its own size. Larger output renders at a higher pixel
     // density; smaller output has Chrome draw each frame at that size, which keeps text crisper than shrinking it afterwards
-    const zoom = resolution ? resolution / height : scale
+    // Sides round to even numbers, which video needs and which gives the standard sizes, like 854x480 for 480p
+    const even = (size) => Math.round(size / 2) * 2
+    const output = resolution ? { width: even((width * resolution) / height), height: resolution } : { width: width * scale, height: height * scale }
+    // Chrome captures at one scale, so it takes the larger of the two, with any pixel over cropped when encoding
+    const zoom = Math.max(output.width / width, output.height / height)
     const shrink = Math.min(zoom, 1)
-    const output = { width: Math.round(width * zoom), height: Math.round(height * zoom) }
+
+    // Other sites are reached by naming them first when listed in EXTERNAL_DOMAINS
+    const [, host, rest = "/"] = path.match(/^\/([^/]*)(\/.*)?$/)
+    const domains = (this.env.EXTERNAL_DOMAINS ?? "")
+      .split(",")
+      .map((domain) => domain.trim())
+      .filter((domain) => domain)
+    const external = domains.includes(host)
 
     const params = [
       ...(settings.query ? settings.query.replace(/^\?/, "").split("&") : []),
-      ...(this.env.QUERY_PARAMS ? this.env.QUERY_PARAMS.replace(/^\?/, "").split("&") : []),
+      ...(this.env.QUERY_PARAMS && !external ? this.env.QUERY_PARAMS.replace(/^\?/, "").split("&") : []),
     ]
 
     const query = params.length ? `?${params.join("&")}` : null
 
-    const url = [base, path === "/home" ? "/" : path, query].filter((x) => x).join("")
+    let url = [base, path === "/home" ? "/" : path, query].filter((x) => x).join("")
 
-    if (!this.browser?.isConnected()) {
-      try {
-        this.browser = await puppeteer.launch(this.env.MYBROWSER, { keep_alive: BROWSER_IDLE_LIMIT })
-      } catch (e) {
-        return this.error("Failed to launch browser", e.message)
-      }
+    if (external) {
+      url = `https://${host}${rest}${query ?? ""}`
+    }
+
+    try {
+      await this.connect()
+    } catch (e) {
+      return this.error("Failed to launch browser", e.message)
     }
 
     this.pending++
 
-    let context
     let screenshot
 
     try {
-      context = await this.browser.createBrowserContext()
+      const options = { duration, external, format, height, output, scroll, shrink, width, zoom }
 
-      const page = await context.newPage()
-
-      if (this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
-        await page.setExtraHTTPHeaders({
-          "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
-          "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
-        })
-      }
-
-      await page.setViewport({ width, height, deviceScaleFactor: Math.max(zoom, 1) })
-
-      if (VIDEO_FORMATS.includes(format)) {
-        await prepare(page)
-      }
-
-      const response = await page.goto(url, { waitUntil: "networkidle0" })
+      // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
+      screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
 
       // Pass error pages through instead of screenshotting them
-      if (!response.ok()) {
-        return new Response(null, { status: response.status() })
-      }
-
-      if (VIDEO_FORMATS.includes(format)) {
-        screenshot = await record(page, { format, ...output, duration, clip: shrink < 1 ? { x: 0, y: 0, width, height, scale: shrink } : undefined })
-      } else if (format === "pdf") {
-        screenshot = await page.pdf({
-          format: "A4",
-          margin: { top: 20, right: 40, bottom: 20, left: 40 },
-        })
-      } else {
-        screenshot = await page.screenshot({
-          clip: { width, height, x: 0, y: 0, scale: shrink },
-        })
+      if (screenshot instanceof Response) {
+        return screenshot
       }
     } catch (e) {
       console.error(`Failed to render ${url}: ${e.message}`)
 
       return this.error("Failed to render page", e.message)
     } finally {
-      await context?.close().catch(() => {})
-
       // Close the browser once it has been idle for BROWSER_KEEP_ALIVE seconds
       this.pending--
       await this.storage.setAlarm(Date.now() + BROWSER_KEEP_ALIVE * 1000)
@@ -215,6 +220,90 @@ export class Browser {
         Expires: new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
       },
     })
+  }
+
+  // Requests that arrive while the browser is launching share the launch
+  async connect() {
+    if (!this.browser?.isConnected()) {
+      this.launching ??= puppeteer.launch(this.env.MYBROWSER, { keep_alive: BROWSER_IDLE_LIMIT }).finally(() => {
+        this.launching = null
+      })
+      this.browser = await this.launching
+    }
+  }
+
+  queue(task) {
+    const turn = this.recordings.then(task)
+
+    this.recordings = turn.catch(() => {})
+
+    return turn
+  }
+
+  // Tries once more in a new browser when the browser dies, which takes everything in it down too
+  async attempt(url, options) {
+    await this.connect()
+
+    try {
+      return await this.render(url, options)
+    } catch (e) {
+      if (this.browser.isConnected()) {
+        throw e
+      }
+
+      await this.connect()
+
+      return await this.render(url, options)
+    }
+  }
+
+  // Each attempt gets a fresh context, so nothing from a failed one carries over
+  async render(url, { duration, external, format, height, output, scroll, shrink, width, zoom }) {
+    const context = await this.browser.createBrowserContext()
+
+    try {
+      const page = await context.newPage()
+
+      if (!external && this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
+        await page.setExtraHTTPHeaders({
+          "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
+          "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+        })
+      }
+
+      await page.setViewport({ width, height, deviceScaleFactor: Math.max(zoom, 1) })
+
+      if (VIDEO_FORMATS.includes(format)) {
+        await prepare(page)
+      }
+
+      const response = await page.goto(url, { waitUntil: "load" })
+
+      if (!response.ok()) {
+        return new Response(null, { status: response.status() })
+      }
+
+      // Wait for requests to finish rather than for Chrome to call the page idle, which a busy page like one drawing
+      // WebGL without a GPU never reaches
+      await page.waitForNetworkIdle()
+
+      if (VIDEO_FORMATS.includes(format)) {
+        return await record(page, { format, ...output, duration, scroll, clip: shrink < 1 ? { x: 0, y: 0, width, height, scale: shrink } : undefined })
+      }
+
+      if (format === "pdf") {
+        return await page.pdf({
+          format: "A4",
+          margin: { top: 20, right: 40, bottom: 20, left: 40 },
+        })
+      }
+
+      return await page.screenshot({
+        clip: { width, height, x: 0, y: 0, scale: shrink },
+      })
+    } finally {
+      await context.close().catch(() => {})
+    }
   }
 
   async alarm() {

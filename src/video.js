@@ -89,7 +89,84 @@ export async function prepare(page) {
   await page.evaluateOnNewDocument(clock)
 }
 
-async function capture(page, encoder, { clip, duration, fps }) {
+// Eases in and out, so a scroll doesn't start or stop with a jolt
+const ease = (progress) => (1 - Math.cos(Math.PI * progress)) / 2
+
+const PIXELS = /^(\d+)px$/
+
+// Splits scrolling through each stop in turn into equally long parts as [from, to], pausing at each one between moves
+function partsFor(tops) {
+  return [
+    ...tops.slice(1).flatMap((to, i) => [
+      [tops[i], tops[i]],
+      [tops[i], to],
+    ]),
+    [tops.at(-1), tops.at(-1)],
+  ]
+}
+
+// Where the page is part way through its parts
+function position(progress, parts) {
+  const part = Math.min(Math.floor(progress * parts.length), parts.length - 1)
+  const [from, to] = parts[part]
+
+  return from + (to - from) * ease(progress * parts.length - part)
+}
+
+// Where the page scrolls to for each stop, a position like 2000px or an element's id, as far as the page goes. An element
+// respects any scroll margin, like one leaving room for a sticky header
+async function locate(page, stops) {
+  return page.evaluate(
+    (stops, pixels) => {
+      const tops = stops.map((stop) => {
+        const position = stop.match(new RegExp(pixels))
+        const element = position ? null : document.getElementById(stop)
+
+        if (position) {
+          window.scrollTo({ top: Number(position[1]), behavior: "instant" })
+        } else if (element) {
+          element.scrollIntoView({ behavior: "instant", block: "start" })
+        } else {
+          throw new Error(`Nothing to scroll to with the id ${stop}`)
+        }
+
+        return window.scrollY
+      })
+
+      window.scrollTo({ top: 0, behavior: "instant" })
+
+      return tops
+    },
+    stops,
+    PIXELS.source,
+  )
+}
+
+// Pauses at the top, then scrolls to each stop in turn, pausing at each one
+async function scrolling(page, stops) {
+  // Anything loading above a stop moves it, so it is measured again once loaded, and a position may be past the bottom until then
+  const positions = stops.map((stop) => Number(stop.match(PIXELS)?.[1] ?? 0))
+
+  await preload(page, Math.max(...positions, ...(await locate(page, stops))))
+
+  return partsFor([0, ...(await locate(page, stops))])
+}
+
+// Scrolls through once a screen at a time, so anything that loads as it comes into view is ready before recording
+async function preload(page, scroll) {
+  await page.evaluate(async (scroll) => {
+    for (let top = 0; top < scroll; top += window.innerHeight) {
+      window.scrollTo({ top, behavior: "instant" })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    window.scrollTo({ top: scroll, behavior: "instant" })
+  }, scroll)
+  await page.waitForNetworkIdle()
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }))
+}
+
+async function capture(page, encoder, { clip, duration, fps, parts }) {
   const session = await page.createCDPSession()
   let previous
   let count = 0
@@ -110,15 +187,34 @@ async function capture(page, encoder, { clip, duration, fps }) {
   try {
     await page.evaluate(() => {
       window.__clock.freeze()
-      window.__clock.advance(0)
+
+      return window.__clock.advance(0)
     })
 
-    for (let frame = 0; frame < duration * fps; frame++) {
+    const frames = duration * fps
+    let offset = 0
+
+    for (let frame = 0; frame < frames; frame++) {
       if (frame) {
-        await page.evaluate((ms) => window.__clock.advance(ms), 1000 / fps)
+        const top = parts ? position(frame / (frames - 1), parts) : null
+
+        offset = await page.evaluate(
+          async (ms, top) => {
+            if (top !== null) {
+              window.scrollTo({ top, behavior: "instant" })
+            }
+
+            await window.__clock.advance(ms)
+
+            return window.scrollY
+          },
+          1000 / fps,
+          top,
+        )
       }
 
-      const { data } = await session.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip })
+      // A clip is measured from the top of the page, so it follows the scroll to stay on screen
+      const { data } = await session.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip: clip && { ...clip, y: clip.y + offset } })
 
       if (data === previous) {
         count++
@@ -136,7 +232,7 @@ async function capture(page, encoder, { clip, duration, fps }) {
   }
 }
 
-export async function record(page, { format, width, height, duration, clip }) {
+export async function record(page, { format, width, height, duration, clip, scroll }) {
   const fps = FRAME_RATES[format]
 
   // H.264 needs even dimensions
@@ -155,7 +251,10 @@ export async function record(page, { format, width, height, duration, clip }) {
 
     // Background tabs stop painting, which stalls screenshots
     await page.bringToFront()
-    await capture(page, encoder, { clip, duration, fps })
+
+    const parts = scroll ? await scrolling(page, scroll) : null
+
+    await capture(page, encoder, { clip, duration, fps, parts })
 
     const bytes = new Uint8Array(Buffer.from(await encoder.evaluate(() => window.__encoder.finish()), "base64"))
 

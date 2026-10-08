@@ -3,6 +3,7 @@
     now: performance.now.bind(performance),
     dateNow: Date.now,
     requestAnimationFrame: window.requestAnimationFrame.bind(window),
+    setTimeout: window.setTimeout.bind(window),
   }
   const origin = real.now()
   const epoch = real.dateNow()
@@ -98,9 +99,35 @@
       frozen = true
     },
 
-    // CSS animations run on the real clock, so pause and seek them
+    // CSS animations and videos run on the real clock, so pause and seek them
     advance(ms) {
       run(now + ms)
+
+      window.__videos ??= new Map()
+
+      const seeks = [...document.querySelectorAll("video")]
+        .filter((video) => video.readyState >= 1)
+        .map((video) => {
+          if (!window.__videos.has(video)) {
+            window.__videos.set(video, video.currentTime - now / 1000)
+          }
+
+          video.pause()
+
+          const time = window.__videos.get(video) + now / 1000
+
+          if (Math.abs(video.currentTime - time) < 0.001) {
+            return null
+          }
+
+          video.currentTime = time
+
+          // A seek that never lands should not hold up the recording
+          return Promise.race([
+            new Promise((resolve) => video.addEventListener("seeked", resolve, { once: true })),
+            new Promise((resolve) => real.setTimeout(resolve, 5000)),
+          ])
+        })
 
       window.__animations ??= new Map()
 
@@ -112,6 +139,8 @@
 
         animation.currentTime = now - window.__animations.get(animation)
       }
+
+      return Promise.all(seeks)
     },
   }
 })()

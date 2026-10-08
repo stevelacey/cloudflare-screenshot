@@ -17,6 +17,7 @@ function createMockPage() {
     setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
     setViewport: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue({ ok: () => true, status: () => 200 }),
+    waitForNetworkIdle: vi.fn().mockResolvedValue(undefined),
     pdf: vi.fn().mockResolvedValue("pdf-bytes"),
     screenshot: vi.fn().mockResolvedValue("png-bytes"),
     close: vi.fn().mockResolvedValue(undefined),
@@ -167,18 +168,45 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar.pdf?dark=on")
   })
 
-  it("includes duration in the cache key", async () => {
+  it("includes duration and scroll in the cache key, whichever order they come in", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
-    await worker.fetch({ url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/1200x630/duration=20s/foo/bar@2x.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/scroll=300px,duration=2s/foo/bar.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/duration=8s,scroll=year-2026;2000px;0px/foo/bar.mp4" }, env, ctx)
 
-    expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-1200x630-20s@2x.mp4")
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([
+      ["example.com/foo/bar-1200x630-20s@2x.mp4"],
+      ["example.com/foo/bar-2s-to-300px.mp4"],
+      ["example.com/foo/bar-8s-to-year-2026;2000px;0px.mp4"],
+    ])
+  })
+
+  it("returns a 404 for options that don't exist or are out of range", async () => {
+    for (const options of [
+      "duration=60s",
+      "duration=2",
+      "scroll=a.b",
+      "scroll=a;;b",
+      "scroll=a;",
+      "steps=3",
+      "scrollto=a",
+      "speed=2s",
+      "constructor=1",
+      "duration=2s,zoom=2",
+    ]) {
+      const response = await worker.fetch({ url: `https://example.com/screenshot/${options}/foo/bar.mp4` }, env, ctx)
+
+      expect(response.status).toBe(404)
+    }
+
+    expect(env.SCREENSHOTS.get).not.toHaveBeenCalled()
   })
 
   it("includes resolution in the cache key, storing 2160p and 4k as one file", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
-    await worker.fetch({ url: "https://example.com/screenshot/1200x630/3s/foo/bar@480p.webp" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/1200x630/duration=3s/foo/bar@480p.webp" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/foo/bar@2160p.png" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/foo/bar@4k.png" }, env, ctx)
 
@@ -262,7 +290,8 @@ describe("Browser", () => {
       height: 720,
       deviceScaleFactor: 1,
     })
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "load" })
+    expect(instance.page.waitForNetworkIdle).toHaveBeenCalled()
     expect(instance.page.screenshot).toHaveBeenCalledWith({
       clip: { width: 1280, height: 720, x: 0, y: 0, scale: 1 },
     })
@@ -314,7 +343,7 @@ describe("Browser", () => {
       height: 768,
       deviceScaleFactor: 2,
     })
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?dark=on", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?dark=on", { waitUntil: "load" })
     expect(instance.page.pdf).toHaveBeenCalledWith({
       format: "A4",
       margin: { top: 20, right: 40, bottom: 20, left: 40 },
@@ -328,12 +357,12 @@ describe("Browser", () => {
     vi.mocked(record).mockResolvedValue("mp4-bytes")
 
     const response = await browser.fetch({
-      url: "https://example.com/screenshot/1200x630/20s/foo/bar@2x.mp4",
+      url: "https://example.com/screenshot/1200x630/duration=20s/foo/bar@2x.mp4",
     })
 
     expect(prepare).toHaveBeenCalledWith(instance.page)
     expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(instance.page.goto.mock.invocationCallOrder[0])
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "load" })
     expect(record).toHaveBeenCalledWith(instance.page, { format: "mp4", width: 2400, height: 1260, duration: 20 })
     expect(instance.page.screenshot).not.toHaveBeenCalled()
     expect(response.headers.get("Content-Type")).toBe("video/mp4")
@@ -344,11 +373,35 @@ describe("Browser", () => {
     await browser.fetch({ url: "https://example.com/screenshot/foo/bar@480p.png" })
 
     expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 1 })
-    expect(instance.page.screenshot).toHaveBeenCalledWith({ clip: { width: 1280, height: 720, x: 0, y: 0, scale: 480 / 720 } })
+    expect(instance.page.screenshot).toHaveBeenCalledWith({ clip: { width: 1280, height: 720, x: 0, y: 0, scale: 854 / 1280 } })
+  })
+
+  it("gives each resolution its standard size", async () => {
+    const sizes = {}
+
+    for (const resolution of ["240p", "360p", "480p", "720p", "1080p", "1440p", "2160p", "4k"]) {
+      vi.mocked(record).mockClear()
+      await browser.fetch({ url: `https://example.com/screenshot/foo/${resolution}@${resolution}.mp4` })
+
+      const { width, height } = vi.mocked(record).mock.calls[0][1]
+
+      sizes[resolution] = `${width}x${height}`
+    }
+
+    expect(sizes).toEqual({
+      "240p": "426x240",
+      "360p": "640x360",
+      "480p": "854x480",
+      "720p": "1280x720",
+      "1080p": "1920x1080",
+      "1440p": "2560x1440",
+      "2160p": "3840x2160",
+      "4k": "3840x2160",
+    })
   })
 
   it("records a smaller resolution at that size", async () => {
-    await browser.fetch({ url: "https://example.com/screenshot/1200x630/3s/foo/bar@360p.mp4" })
+    await browser.fetch({ url: "https://example.com/screenshot/1200x630/duration=3s/foo/bar@360p.mp4" })
 
     expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1200, height: 630, deviceScaleFactor: 1 })
     expect(record).toHaveBeenCalledWith(instance.page, {
@@ -356,7 +409,7 @@ describe("Browser", () => {
       width: 686,
       height: 360,
       duration: 3,
-      clip: { x: 0, y: 0, width: 1200, height: 630, scale: 360 / 630 },
+      clip: { x: 0, y: 0, width: 1200, height: 630, scale: 686 / 1200 },
     })
   })
 
@@ -373,6 +426,36 @@ describe("Browser", () => {
     expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 3 })
   })
 
+  it("screenshots domains listed in EXTERNAL_DOMAINS without the site's access headers or query params", async () => {
+    env.EXTERNAL_DOMAINS = "example.org, news.example.net"
+    env.CF_ACCESS_CLIENT_ID = "client-id"
+    env.CF_ACCESS_CLIENT_SECRET = "client-secret"
+    env.QUERY_PARAMS = "screenshot=true"
+
+    await browser.fetch({ url: "https://example.com/screenshots/news.example.net/story?id=1" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://news.example.net/story?id=1", { waitUntil: "load" })
+    expect(instance.page.setExtraHTTPHeaders).not.toHaveBeenCalled()
+
+    await browser.fetch({ url: "https://example.com/screenshots/example.org" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.org/", { waitUntil: "load" })
+  })
+
+  it("never treats the site's root as an external domain", async () => {
+    env.EXTERNAL_DOMAINS = "example.org,"
+
+    await browser.fetch({ url: "https://example.com/screenshots/" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/", { waitUntil: "load" })
+  })
+
+  it("treats an unlisted domain as a path on the site", async () => {
+    await browser.fetch({ url: "https://example.com/screenshots/example.org/foo" })
+
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/example.org/foo", { waitUntil: "load" })
+  })
+
   it("records a GIF for five seconds by default", async () => {
     vi.mocked(record).mockResolvedValue("gif-bytes")
 
@@ -381,7 +464,6 @@ describe("Browser", () => {
     expect(record).toHaveBeenCalledWith(instance.page, { format: "gif", width: 1280, height: 720, duration: 5 })
     expect(response.headers.get("Content-Type")).toBe("image/gif")
   })
-
   it("records an animated WebP", async () => {
     vi.mocked(record).mockResolvedValue("webp-bytes")
 
@@ -391,11 +473,11 @@ describe("Browser", () => {
     expect(response.headers.get("Content-Type")).toBe("image/webp")
   })
 
-  it("treats durations over 30 seconds as part of the path", async () => {
-    await browser.fetch({ url: "https://example.com/screenshot/60s/foo/bar.mp4" })
+  it("scrolls to each stop while recording", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/1200x630/duration=8s,scroll=2026;2000px;0px/foo/bar@480p.mp4" })
 
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/60s/foo/bar", { waitUntil: "networkidle0" })
-    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ duration: 5 }))
+    expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1200, height: 630, deviceScaleFactor: 1 })
+    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ duration: 8, scroll: ["2026", "2000px", "0px"] }))
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {
@@ -405,7 +487,7 @@ describe("Browser", () => {
       url: "https://example.com/screenshot/foo/bar.png?dark=on",
     })
 
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?dark=on&utm=test", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?dark=on&utm=test", { waitUntil: "load" })
   })
 
   it("uses only the environment's QUERY_PARAMS when the URL has no query string", async () => {
@@ -413,7 +495,7 @@ describe("Browser", () => {
 
     await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
 
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?utm=test", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar?utm=test", { waitUntil: "load" })
   })
 
   it("screenshots the homepage for /home, keeping the query string", async () => {
@@ -421,13 +503,13 @@ describe("Browser", () => {
 
     await browser.fetch({ url: "https://example.com/screenshot/home.png?dark=on" })
 
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/?dark=on&utm=test", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/?dark=on&utm=test", { waitUntil: "load" })
   })
 
   it("does not rewrite nested home paths", async () => {
     await browser.fetch({ url: "https://example.com/screenshot/foo/home.png" })
 
-    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/home", { waitUntil: "networkidle0" })
+    expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/home", { waitUntil: "load" })
   })
 
   it("sends CF Access headers when configured", async () => {
@@ -452,11 +534,90 @@ describe("Browser", () => {
 
   it("relaunches when the existing browser is no longer connected", async () => {
     await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
-    instance.isConnected.mockReturnValue(false)
+    instance.isConnected.mockReturnValueOnce(false)
 
     await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
 
     expect(puppeteer.launch).toHaveBeenCalledTimes(2)
+  })
+
+  it("launches one browser for requests that arrive while it launches", async () => {
+    await Promise.all([
+      browser.fetch({ url: "https://example.com/screenshot/foo/one.png" }),
+      browser.fetch({ url: "https://example.com/screenshot/foo/two.png" }),
+    ])
+
+    expect(puppeteer.launch).toHaveBeenCalledTimes(1)
+  })
+
+  it("tries again once in a new browser when the browser dies", async () => {
+    const replacement = createMockBrowserInstance()
+    puppeteer.launch.mockResolvedValueOnce(instance).mockResolvedValueOnce(replacement)
+    instance.page.screenshot.mockImplementationOnce(async () => {
+      instance.isConnected.mockReturnValue(false)
+      throw new Error("Protocol error: Connection closed.")
+    })
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(puppeteer.launch).toHaveBeenCalledTimes(2)
+    expect(await response.text()).toBe("png-bytes")
+  })
+
+  it("gives up when the browser dies twice", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const replacement = createMockBrowserInstance()
+    puppeteer.launch.mockResolvedValueOnce(instance).mockResolvedValueOnce(replacement)
+    for (const dying of [instance, replacement]) {
+      dying.page.screenshot.mockImplementationOnce(async () => {
+        dying.isConnected.mockReturnValue(false)
+        throw new Error("Protocol error: Connection closed.")
+      })
+    }
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe("Failed to render page: Protocol error: Connection closed.")
+    error.mockRestore()
+  })
+
+  it("records one video at a time, while screenshots go straight through", async () => {
+    let finish
+    vi.mocked(record).mockClear().mockResolvedValue("video-bytes")
+    vi.mocked(record).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve("first-bytes")
+        }),
+    )
+
+    const first = browser.fetch({ url: "https://example.com/screenshot/foo/one.mp4" })
+    const second = browser.fetch({ url: "https://example.com/screenshot/foo/two.mp4" })
+
+    await vi.waitFor(() => expect(record).toHaveBeenCalledTimes(1))
+    expect(await (await browser.fetch({ url: "https://example.com/screenshot/foo/three.png" })).text()).toBe("png-bytes")
+    expect(record).toHaveBeenCalledTimes(1)
+
+    finish()
+
+    expect(await (await first).text()).toBe("first-bytes")
+    expect(await (await second).text()).toBe("video-bytes")
+    expect(record).toHaveBeenCalledTimes(2)
+  })
+
+  it("moves on to the next recording when one fails", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    vi.mocked(record).mockResolvedValue("video-bytes").mockRejectedValueOnce(new Error("boom"))
+
+    const [first, second] = await Promise.all([
+      browser.fetch({ url: "https://example.com/screenshot/foo/one.mp4" }),
+      browser.fetch({ url: "https://example.com/screenshot/foo/two.mp4" }),
+    ])
+
+    expect(first.status).toBe(500)
+    expect(await second.text()).toBe("video-bytes")
+    error.mockRestore()
   })
 
   it("returns a 500 when launching the browser fails", async () => {

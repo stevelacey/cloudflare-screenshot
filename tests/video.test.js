@@ -25,6 +25,12 @@ const moov = (offsets, ...extra) =>
 function createPage(screenshots, result) {
   const window = {
     __clock: { freeze: vi.fn(), advance: vi.fn() },
+    innerHeight: 720,
+    scrollY: 0,
+    bottom: Infinity,
+    scrollTo: vi.fn(({ top }) => {
+      window.scrollY = Math.min(top, window.bottom)
+    }),
     __encoder: {
       start: vi.fn().mockResolvedValue(undefined),
       add: vi.fn().mockResolvedValue(undefined),
@@ -39,8 +45,18 @@ function createPage(screenshots, result) {
     close: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn(async (fn, ...args) => (typeof fn === "function" ? fn(...args) : undefined)),
   }
+  const elements = {}
   vi.stubGlobal("window", window)
+  vi.stubGlobal("document", {
+    getElementById: (id) =>
+      elements[id] && {
+        scrollIntoView: () => {
+          window.scrollY = Math.min(elements[id], window.bottom)
+        },
+      },
+  })
   return {
+    elements,
     window,
     session,
     encoderPage,
@@ -48,6 +64,7 @@ function createPage(screenshots, result) {
     evaluateOnNewDocument: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue(undefined),
     bringToFront: vi.fn().mockResolvedValue(undefined),
+    waitForNetworkIdle: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn(async (fn, ...args) => (typeof fn === "function" ? fn(...args) : undefined)),
     browserContext: () => ({ newPage: async () => encoderPage }),
   }
@@ -146,6 +163,88 @@ describe("record", () => {
 
     expect(page.session.send).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip })
     expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, width: 640, height: 360 })
+  })
+
+  it("loads the page down to the stop, then pauses, scrolls smoothly to it, and pauses again", async () => {
+    const page = createPage(Array(13).fill("a"), base64("gif-bytes"))
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 1.3, scroll: ["1000px"] })
+
+    const tops = page.window.scrollTo.mock.calls.map(([{ top }]) => Math.round(top))
+
+    // Measured, loaded a screen at a time, then measured again
+    expect(tops.slice(0, 8)).toEqual([1000, 0, 0, 720, 1000, 0, 1000, 0])
+    expect(page.waitForNetworkIdle.mock.invocationCallOrder[0]).toBeLessThan(page.window.scrollTo.mock.invocationCallOrder[5])
+    expect(tops.slice(8)).toEqual([0, 0, 0, 0, 146, 500, 854, 1000, 1000, 1000, 1000, 1000])
+    expect(page.window.__clock.advance).toHaveBeenCalledTimes(13)
+  })
+
+  it("moves the clip with the scroll, as it is measured from the top of the page", async () => {
+    const page = createPage(Array(13).fill("a"), base64("gif-bytes"))
+    const clip = { x: 0, y: 0, width: 1280, height: 720, scale: 0.5 }
+
+    await record(page, { format: "gif", width: 640, height: 360, duration: 1.3, scroll: ["1000px"], clip })
+
+    const offsets = page.session.send.mock.calls.map(([, { clip }]) => Math.round(clip.y))
+
+    expect(offsets).toEqual([0, 0, 0, 0, 0, 146, 500, 854, 1000, 1000, 1000, 1000, 1000])
+  })
+
+  it("scrolls to each position in turn, back up as well as down", async () => {
+    const page = createPage(Array(11).fill("a"), base64("gif-bytes"))
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 1.1, scroll: ["2000px", "0px"] })
+
+    const tops = page.window.scrollTo.mock.calls.slice(-10).map(([{ top }]) => Math.round(top))
+
+    expect(tops).toEqual([0, 0, 1000, 2000, 2000, 2000, 1000, 0, 0, 0])
+  })
+
+  it("stops at the bottom of the page for a position past it", async () => {
+    const page = createPage(Array(7).fill("a"), base64("gif-bytes"))
+    page.window.bottom = 1500
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 0.7, scroll: ["4000px"] })
+
+    const tops = page.window.scrollTo.mock.calls.map(([{ top }]) => Math.round(top))
+
+    // The page may only grow that far once loaded
+    expect(tops).toContain(4000)
+    expect(tops.slice(-6)).toEqual([0, 0, 750, 1500, 1500, 1500])
+  })
+
+  it("pauses at the top, then scrolls to each element in turn, pausing at each", async () => {
+    const page = createPage(Array(15).fill("a"), base64("gif-bytes"))
+
+    Object.assign(page.elements, { a: 500, b: 1500, c: 3000 })
+    // Images loading above them push them down
+    page.waitForNetworkIdle.mockImplementation(async () => {
+      Object.assign(page.elements, { a: 600, b: 1600, c: 3100 })
+    })
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 1.5, scroll: ["a", "b", "c"] })
+
+    const tops = page.window.scrollTo.mock.calls.map(([{ top }]) => Math.round(top))
+
+    expect(tops.slice(0, 7)).toEqual([0, 0, 720, 1440, 2160, 2880, 3000])
+    expect(tops.slice(-14)).toEqual([0, 0, 300, 600, 600, 600, 1100, 1600, 1600, 1600, 2350, 3100, 3100, 3100])
+  })
+
+  it("fails without an element to scroll to", async () => {
+    const page = createPage([], base64("gif-bytes"))
+
+    await expect(record(page, { format: "gif", width: 10, height: 10, duration: 1, scroll: ["missing"] })).rejects.toThrow(
+      "Nothing to scroll to with the id missing",
+    )
+  })
+
+  it("leaves the page where it is without a scroll", async () => {
+    const page = createPage(Array(10).fill("a"), base64("gif-bytes"))
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 1 })
+
+    expect(page.window.scrollTo).not.toHaveBeenCalled()
+    expect(page.waitForNetworkIdle).not.toHaveBeenCalled()
   })
 
   it("records an MP4 with the bundled encoder at even dimensions and optimizes it", async () => {
