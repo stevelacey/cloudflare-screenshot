@@ -1,6 +1,7 @@
 import puppeteer from "@cloudflare/puppeteer"
 import { regexMerge } from "./support"
 import { prepare, record } from "./video"
+import { cue, youtube } from "./youtube"
 
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
 const BROWSER_IDLE_LIMIT = 10 * 60 * 1000
@@ -16,6 +17,7 @@ const OPTIONS = {
   fps: /^([1-9]|[12][0-9]|30)$/,
   quality: /^([1-9][0-9]?|100)$/,
   scroll: /^([\w-]+(?:;[\w-]+){0,19})$/,
+  start: /^((?=\d)(?:\d+h)?(?:\d+m)?(?:\d+s)?)$/,
 }
 const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
@@ -30,6 +32,7 @@ const URL_PATTERN = regexMerge(
 const VIDEO_FORMATS = ["gif", "mp4", "webp"]
 // GIFs have no quality setting, their size comes from the palette, and nor do PNGs or PDFs
 const QUALITY_FORMATS = ["mp4", "webp"]
+const YOUTUBE_ATTEMPTS = 20
 
 const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 
@@ -68,7 +71,7 @@ function settingsFor(url) {
   return settings
 }
 
-function cacheKey({ base, duration, format, fps, path, quality, query, resolution, scroll, width, height, scale, uhd }) {
+function cacheKey({ base, duration, format, fps, path, quality, query, resolution, scroll, start, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -78,6 +81,7 @@ function cacheKey({ base, duration, format, fps, path, quality, query, resolutio
     duration ? `-${duration}s` : "",
     fps ? `-${fps}fps` : "",
     quality ? `-q${quality}` : "",
+    start ? `-from-${start}` : "",
     scroll ? `-to-${scroll}` : "",
     outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
@@ -171,13 +175,19 @@ export class Browser {
     const zoom = Math.max(output.width / width, output.height / height)
     const shrink = Math.min(zoom, 1)
 
-    // Other sites are reached by naming them first when listed in EXTERNAL_DOMAINS
+    // YouTube videos are reached through /youtube/<id>, and other sites by naming them first when listed in EXTERNAL_DOMAINS
     const [, host, rest = "/"] = path.match(/^\/([^/]*)(\/.*)?$/)
     const domains = (this.env.EXTERNAL_DOMAINS ?? "")
       .split(",")
       .map((domain) => domain.trim())
       .filter((domain) => domain)
-    const external = domains.includes(host)
+    const video = host === "youtube" ? youtube(rest, settings.start) : null
+    const external = host === "youtube" || domains.includes(host)
+
+    // Only a YouTube video has somewhere to start from
+    if ((host === "youtube" || settings.start) && !video) {
+      return new Response(null, { status: 404 })
+    }
 
     const params = [
       ...(settings.query ? settings.query.replace(/^\?/, "").split("&") : []),
@@ -188,7 +198,9 @@ export class Browser {
 
     let url = [base, path === "/home" ? "/" : path, query].filter((x) => x).join("")
 
-    if (external) {
+    if (video) {
+      url = video.url
+    } else if (external) {
       url = `https://${host}${rest}${query ?? ""}`
     }
 
@@ -203,7 +215,7 @@ export class Browser {
     let screenshot
 
     try {
-      const options = { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }
+      const options = { base, duration, external, format, fps, height, output, quality, scroll, shrink, video, width, zoom }
 
       // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
       screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
@@ -255,25 +267,27 @@ export class Browser {
     return turn
   }
 
-  // Tries once more in a new browser when the browser dies, which takes everything in it down too
+  // Retries a refused YouTube video, and once in a new browser when the browser dies, which takes everything in it down too
   async attempt(url, options) {
-    await this.connect()
+    let relaunched = false
 
-    try {
-      return await this.render(url, options)
-    } catch (e) {
-      if (this.browser.isConnected()) {
-        throw e
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.connect()
+
+        return await this.render(url, options)
+      } catch (e) {
+        if (!this.browser.isConnected() && !relaunched) {
+          relaunched = true
+        } else if (!e.retry || attempt === YOUTUBE_ATTEMPTS) {
+          throw e
+        }
       }
-
-      await this.connect()
-
-      return await this.render(url, options)
     }
   }
 
-  // Each attempt gets a fresh context, so nothing from a failed one carries over
-  async render(url, { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }) {
+  // Each attempt gets a fresh context, so nothing from a refused one carries over
+  async render(url, { base, duration, external, format, fps, height, output, quality, scroll, shrink, video, width, zoom }) {
     const context = await this.browser.createBrowserContext()
 
     try {
@@ -292,7 +306,12 @@ export class Browser {
         await prepare(page)
       }
 
-      const response = await page.goto(url, { waitUntil: "load" })
+      // YouTube refuses embeds without a referrer, and its player never lets the network go idle
+      const response = await page.goto(url, video ? { waitUntil: "domcontentloaded", referer: `${base}/` } : { waitUntil: "load" })
+
+      if (!response.ok() && video) {
+        throw Object.assign(new Error(`YouTube: ${response.status()}`), { retry: true })
+      }
 
       if (!response.ok()) {
         return new Response(null, { status: response.status() })
@@ -300,7 +319,11 @@ export class Browser {
 
       // Wait for requests to finish rather than for Chrome to call the page idle, which a busy page like one drawing
       // WebGL without a GPU never reaches
-      await page.waitForNetworkIdle()
+      if (video) {
+        await cue(page, video.start)
+      } else {
+        await page.waitForNetworkIdle()
+      }
 
       if (VIDEO_FORMATS.includes(format)) {
         return await record(page, {

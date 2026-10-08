@@ -2,9 +2,15 @@ import puppeteer from "@cloudflare/puppeteer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import worker, { Browser } from "../src/index.js"
 import { prepare, record } from "../src/video.js"
+import { cue } from "../src/youtube.js"
 
 vi.mock("@cloudflare/puppeteer", () => ({
   default: { launch: vi.fn() },
+}))
+
+vi.mock("../src/youtube.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  cue: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock("../src/video.js", () => ({
@@ -168,17 +174,19 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar.pdf?dark=on")
   })
 
-  it("includes duration and scroll in the cache key, whichever order they come in", async () => {
+  it("includes duration, start and scroll in the cache key, whichever order they come in", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
     await worker.fetch({ url: "https://example.com/screenshot/1200x630/duration=20s/foo/bar@2x.mp4" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/scroll=300px,duration=2s/foo/bar.mp4" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/duration=8s,scroll=year-2026;2000px;0px/foo/bar.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/start=1m15s,duration=5s/youtube/_TcEfYlW4PA.mp4" }, env, ctx)
 
     expect(env.SCREENSHOTS.get.mock.calls).toEqual([
       ["example.com/foo/bar-1200x630-20s@2x.mp4"],
       ["example.com/foo/bar-2s-to-300px.mp4"],
       ["example.com/foo/bar-8s-to-year-2026;2000px;0px.mp4"],
+      ["example.com/youtube/_TcEfYlW4PA-5s-from-1m15s.mp4"],
     ])
   })
 
@@ -210,6 +218,9 @@ describe("worker.fetch", () => {
       "scroll=a;",
       "steps=3",
       "scrollto=a",
+      "start=75",
+      "start=-5s",
+      "start=1m15",
       "speed=2s",
       "constructor=1",
       "duration=2s,zoom=2",
@@ -450,6 +461,59 @@ describe("Browser", () => {
     expect(instance.page.setViewport).toHaveBeenCalledWith({ width: 1280, height: 720, deviceScaleFactor: 3 })
   })
 
+  it("records a YouTube video from its embed, referred by the site and without its access headers", async () => {
+    env.CF_ACCESS_CLIENT_ID = "client-id"
+    env.CF_ACCESS_CLIENT_SECRET = "client-secret"
+    env.QUERY_PARAMS = "screenshot=true"
+    vi.mocked(record).mockResolvedValue("webp-bytes")
+
+    const response = await browser.fetch({ url: "https://example.com/screenshots/320x180/duration=3s,start=1m12s/youtube/_TcEfYlW4PA.webp" })
+
+    expect(instance.page.setExtraHTTPHeaders).not.toHaveBeenCalled()
+    expect(instance.page.goto).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/www\.youtube-nocookie\.com\/embed\/_TcEfYlW4PA\?.*start=72/), {
+      waitUntil: "domcontentloaded",
+      referer: "https://example.com/",
+    })
+    expect(cue).toHaveBeenCalledWith(instance.page, 72)
+    expect(instance.page.waitForNetworkIdle).not.toHaveBeenCalled()
+    expect(record).toHaveBeenCalledWith(instance.page, { format: "webp", width: 320, height: 180, duration: 3 })
+    expect(await response.text()).toBe("webp-bytes")
+  })
+
+  it("tries YouTube again in a fresh context when it refuses", async () => {
+    instance.page.goto.mockResolvedValueOnce({ ok: () => false, status: () => 400 })
+    vi.mocked(cue)
+      .mockRejectedValueOnce(Object.assign(new Error("YouTube: An error occurred"), { retry: true }))
+      .mockRejectedValueOnce(Object.assign(new Error("YouTube: An error occurred"), { retry: true }))
+
+    const response = await browser.fetch({ url: "https://example.com/screenshots/youtube/_TcEfYlW4PA" })
+
+    expect(cue).toHaveBeenCalledTimes(3)
+    expect(instance.createBrowserContext).toHaveBeenCalledTimes(4)
+    expect(instance.context.close).toHaveBeenCalledTimes(4)
+    expect(await response.text()).toBe("png-bytes")
+  })
+
+  it("gives up on YouTube after twenty refusals", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    vi.mocked(cue).mockRejectedValue(Object.assign(new Error("YouTube: An error occurred"), { retry: true }))
+
+    const response = await browser.fetch({ url: "https://example.com/screenshots/youtube/_TcEfYlW4PA" })
+
+    expect(cue).toHaveBeenCalledTimes(20)
+    expect(response.status).toBe(500)
+    expect(await response.text()).toBe("Failed to render page: YouTube: An error occurred")
+    vi.mocked(cue).mockReset()
+    error.mockRestore()
+  })
+
+  it("returns a 404 for a YouTube path without a video", async () => {
+    const response = await browser.fetch({ url: "https://example.com/screenshots/youtube/@allin" })
+
+    expect(response.status).toBe(404)
+    expect(puppeteer.launch).not.toHaveBeenCalled()
+  })
+
   it("screenshots domains listed in EXTERNAL_DOMAINS without the site's access headers or query params", async () => {
     env.EXTERNAL_DOMAINS = "example.org, news.example.net"
     env.CF_ACCESS_CLIENT_ID = "client-id"
@@ -508,6 +572,13 @@ describe("Browser", () => {
     await browser.fetch({ url: "https://example.com/screenshot/fps=8,quality=60/foo/bar.webp" })
 
     expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ format: "webp", fps: 8, quality: 60 }))
+  })
+
+  it("returns a 404 for a start on anything but a YouTube video", async () => {
+    const response = await browser.fetch({ url: "https://example.com/screenshot/start=5s/foo/bar.mp4" })
+
+    expect(response.status).toBe(404)
+    expect(puppeteer.launch).not.toHaveBeenCalled()
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {
