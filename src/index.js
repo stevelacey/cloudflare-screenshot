@@ -17,7 +17,7 @@ const OPTIONS = {
   duration: /^([1-9]|[12][0-9]|30)s$/,
   fps: /^([1-9]|[12][0-9]|30)$/,
   media: /^(print|screen)$/,
-  motion: /^(reduce)$/,
+  motion: /^(reduce|no-preference)$/,
   quality: /^([1-9][0-9]?|100)$/,
   scroll: /^([\w-]+(?:;[\w-]+){0,19})$/,
 }
@@ -32,13 +32,17 @@ const URL_PATTERN = regexMerge(
   /(?<query>\?.*)?$/,
 )
 const VIDEO_FORMATS = ["gif", "mp4", "webp"]
+const STILL_FORMATS = ["pdf", "png"]
 // Options only some formats use, which the others ignore rather than storing another copy that looks the same. GIFs have
-// no quality setting, their size comes from the palette, and PDFs are laid out for print while the rest are for screens
+// no quality setting, their size comes from the palette, PDFs are laid out for print while the rest are for screens, and
+// stills reduce motion to catch the page settled while videos record it moving
 const OPTION_FORMATS = {
   duration: VIDEO_FORMATS,
   fps: VIDEO_FORMATS,
   "media=print": ["gif", "mp4", "png", "webp"],
   "media=screen": ["pdf"],
+  "motion=no-preference": STILL_FORMATS,
+  "motion=reduce": VIDEO_FORMATS,
   quality: ["mp4", "webp"],
   scroll: VIDEO_FORMATS,
 }
@@ -96,7 +100,7 @@ function cacheKey({ base, colorScheme, contrast, duration, format, fps, media, m
     quality ? `-q${quality}` : "",
     media ? `-${media}` : "",
     colorScheme ? `-${colorScheme}` : "",
-    motion ? "-reduced-motion" : "",
+    motion ? `-${motion}-motion` : "",
     contrast ? `-${contrast}-contrast` : "",
     scroll ? `-to-${scroll}` : "",
     outputSize({ resolution, scale, uhd }),
@@ -181,6 +185,7 @@ export class Browser {
       fps: settings.fps && parseInt(settings.fps, 10),
       quality: settings.quality && parseInt(settings.quality, 10),
       format: settings.format ?? DEFAULT_FORMAT,
+      motion: settings.motion ?? (STILL_FORMATS.includes(settings.format ?? DEFAULT_FORMAT) ? "reduce" : undefined),
       width: parseInt(settings.width ?? DEFAULT_WIDTH, 10),
       height: parseInt(settings.height ?? DEFAULT_HEIGHT, 10),
       scale: parseInt(settings.scale ?? DEFAULT_SCALE, 10),

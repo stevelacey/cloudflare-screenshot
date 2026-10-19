@@ -197,10 +197,10 @@ describe("worker.fetch", () => {
   it("includes emulated media in the cache key", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
-    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce,color-scheme=dark/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce,color-scheme=dark/foo/bar.mp4" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/media=print,contrast=more,color-scheme=light/foo/bar.png" }, env, ctx)
 
-    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark-reduced-motion.png"], ["example.com/foo/bar-print-light-more-contrast.png"]])
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark-reduce-motion.mp4"], ["example.com/foo/bar-print-light-more-contrast.png"]])
   })
 
   it("ignores options the format doesn't use, storing them as the same file", async () => {
@@ -211,6 +211,9 @@ describe("worker.fetch", () => {
     await worker.fetch({ url: "https://example.com/screenshot/media=print,color-scheme=dark/foo/bar.pdf" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.png" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.pdf" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=no-preference/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=no-preference/foo/bar.mp4" }, env, ctx)
 
     expect(env.SCREENSHOTS.get.mock.calls).toEqual([
       ["example.com/foo/bar.gif"],
@@ -218,6 +221,9 @@ describe("worker.fetch", () => {
       ["example.com/foo/bar-dark.pdf"],
       ["example.com/foo/bar.png"],
       ["example.com/foo/bar-screen.pdf"],
+      ["example.com/foo/bar.png"],
+      ["example.com/foo/bar-no-preference-motion.png"],
+      ["example.com/foo/bar.mp4"],
     ])
   })
 
@@ -262,7 +268,7 @@ describe("worker.fetch", () => {
       "prefers-color-scheme=dark",
       "contrast=custom",
       "media=tv",
-      "motion=no-preference",
+      "motion=none",
       "reduced-motion=reduce",
     ]) {
       const response = await worker.fetch({ url: `https://example.com/screenshot/${options}/foo/bar.mp4` }, env, ctx)
@@ -579,8 +585,30 @@ describe("Browser", () => {
     })
   })
 
-  it("leaves media alone when none is requested", async () => {
-    await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+  it("reduces motion for stills by default, to catch the page settled", async () => {
+    for (const url of ["foo/bar.png", "foo/bar.pdf"]) {
+      instance.page.session.send.mockClear()
+
+      await browser.fetch({ url: `https://example.com/screenshot/${url}` })
+
+      expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
+        media: "",
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      })
+    }
+  })
+
+  it("lets stills opt out of reduced motion", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/motion=no-preference/foo/bar.png" })
+
+    expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
+      media: "",
+      features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
+    })
+  })
+
+  it("leaves media alone for videos when none is requested", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar.mp4" })
 
     expect(instance.page.createCDPSession).not.toHaveBeenCalled()
   })

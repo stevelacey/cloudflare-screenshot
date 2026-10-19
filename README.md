@@ -43,16 +43,18 @@ To screenshot your homepage, request `home.png`, which captures `/`, e.g., `scre
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 
-To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/color-scheme=dark,motion=reduce/path/to/something.png`; these work for videos and PDFs too:
+To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/color-scheme=dark,contrast=more/path/to/something.png`; these work for videos and PDFs too:
 
 | Option | Values | Media query |
 | :-- | :-- | :-- |
 | `color-scheme` | `light`, `dark` | `(prefers-color-scheme: dark)` |
 | `contrast` | `more`, `less` | `(prefers-contrast: more)` |
 | `media` | `print`, `screen` | `print` |
-| `motion` | `reduce` | `(prefers-reduced-motion: reduce)` |
+| `motion` | `reduce`, `no-preference` | `(prefers-reduced-motion: reduce)` |
 
 PDFs use your print styles unless you pass `media=screen`, and everything else uses screen styles unless you pass `media=print`.
+
+Screenshots and PDFs reduce motion, so they catch the page settled rather than halfway through an animation, unless you pass `motion=no-preference`. Videos record the page moving unless you pass `motion=reduce`.
 
 
 Environment variables
@@ -97,13 +99,13 @@ Scrolling to an element respects its `scroll-margin-top`, and positions are from
 
 Formats ignore options they don't use, like `quality` on a GIF or `duration` on a PNG, and serve the same file as without them. Options that don't exist or are out of range return a 400 saying which, so typos don't go unnoticed.
 
-| [![Travels](https://steve.ly/screenshots/travels@480p.webp?dark=on)](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50,scroll=2026;2025;2024/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.webp?dark=on) |
+| [![Travels](https://steve.ly/screenshots/color-scheme=dark/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/color-scheme=dark,duration=10s,quality=50/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/color-scheme=dark,duration=10s,quality=50,scroll=2026;2025;2024/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.webp) |
 | --: | --: | --: |
 
 For a video card, add tags like these:
 
 ```html
-<meta property="og:video" content="https://steve.ly/screenshots/travels@480p.mp4?dark=on">
+<meta property="og:video" content="https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4">
 <meta property="og:video:width" content="854">
 <meta property="og:video:height" content="480">
 <meta property="og:video:type" content="video/mp4">
