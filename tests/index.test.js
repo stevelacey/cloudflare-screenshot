@@ -13,7 +13,10 @@ vi.mock("../src/video.js", () => ({
 }))
 
 function createMockPage() {
+  const session = { send: vi.fn().mockResolvedValue(undefined) }
   return {
+    session,
+    createCDPSession: vi.fn().mockResolvedValue(session),
     setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
     setViewport: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue({ ok: () => true, status: () => 200 }),
@@ -191,17 +194,53 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-10s-8fps-q60@480p.webp"], ["example.com/foo/bar-15fps.gif"]])
   })
 
-  it("returns a 404 for quality on formats without it", async () => {
-    for (const format of ["gif", "png", "pdf"]) {
-      const response = await worker.fetch({ url: `https://example.com/screenshot/quality=50/foo/bar.${format}` }, env, ctx)
+  it("includes emulated media in the cache key", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
-      expect(response.status).toBe(404)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce,color-scheme=dark/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=print,contrast=more,color-scheme=light/foo/bar.png" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark-reduced-motion.png"], ["example.com/foo/bar-print-light-more-contrast.png"]])
+  })
+
+  it("ignores options the format doesn't use, storing them as the same file", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/quality=50/foo/bar.gif" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/quality=50,duration=10s,fps=8,scroll=a/foo/bar" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=print,color-scheme=dark/foo/bar.pdf" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.pdf" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([
+      ["example.com/foo/bar.gif"],
+      ["example.com/foo/bar.png"],
+      ["example.com/foo/bar-dark.pdf"],
+      ["example.com/foo/bar.png"],
+      ["example.com/foo/bar-screen.pdf"],
+    ])
+  })
+
+  it("says which option is unknown or invalid", async () => {
+    const unknown = await worker.fetch({ url: "https://example.com/screenshot/duration=5s,colorscheme=dark/foo/bar.png" }, env, ctx)
+    const invalid = await worker.fetch({ url: "https://example.com/screenshot/duration=60s/foo/bar.mp4" }, env, ctx)
+
+    expect(await unknown.text()).toBe("Unknown option: colorscheme")
+    expect(unknown.headers.get("Content-Type")).toBe("text/plain")
+    expect(await invalid.text()).toBe("Invalid duration: 60s")
+  })
+
+  it("still returns a 400 for invalid options the format doesn't use", async () => {
+    for (const url of ["quality=0/foo/bar.gif", "duration=60s/foo/bar.png", "media=tv/foo/bar.pdf"]) {
+      const response = await worker.fetch({ url: `https://example.com/screenshot/${url}` }, env, ctx)
+
+      expect(response.status).toBe(400)
     }
 
     expect(env.SCREENSHOTS.get).not.toHaveBeenCalled()
   })
 
-  it("returns a 404 for options that don't exist or are out of range", async () => {
+  it("returns a 400 for options that don't exist or are out of range", async () => {
     for (const options of [
       "duration=60s",
       "duration=2",
@@ -218,10 +257,17 @@ describe("worker.fetch", () => {
       "fps=15fps",
       "quality=0",
       "quality=101",
+      "color-scheme=blue",
+      "colorscheme=dark",
+      "prefers-color-scheme=dark",
+      "contrast=custom",
+      "media=tv",
+      "motion=no-preference",
+      "reduced-motion=reduce",
     ]) {
       const response = await worker.fetch({ url: `https://example.com/screenshot/${options}/foo/bar.mp4` }, env, ctx)
 
-      expect(response.status).toBe(404)
+      expect(response.status).toBe(400)
     }
 
     expect(env.SCREENSHOTS.get).not.toHaveBeenCalled()
@@ -508,6 +554,35 @@ describe("Browser", () => {
     await browser.fetch({ url: "https://example.com/screenshot/fps=8,quality=60/foo/bar.webp" })
 
     expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ format: "webp", fps: 8, quality: 60 }))
+  })
+
+  it("emulates the requested media type and features", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/media=print,color-scheme=dark,contrast=less,motion=reduce/foo/bar.png" })
+
+    expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
+      media: "print",
+      features: [
+        { name: "prefers-color-scheme", value: "dark" },
+        { name: "prefers-contrast", value: "less" },
+        { name: "prefers-reduced-motion", value: "reduce" },
+      ],
+    })
+    expect(instance.page.session.send.mock.invocationCallOrder[0]).toBeLessThan(instance.page.goto.mock.invocationCallOrder[0])
+  })
+
+  it("emulates features without changing the media type", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/color-scheme=dark/foo/bar.mp4" })
+
+    expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
+      media: "",
+      features: [{ name: "prefers-color-scheme", value: "dark" }],
+    })
+  })
+
+  it("leaves media alone when none is requested", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(instance.page.createCDPSession).not.toHaveBeenCalled()
   })
 
   it("merges the environment's QUERY_PARAMS with the URL's own query string", async () => {

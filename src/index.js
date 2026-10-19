@@ -12,8 +12,12 @@ const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
 const DEFAULT_SCALE = 1
 const OPTIONS = {
+  "color-scheme": /^(light|dark)$/,
+  contrast: /^(more|less)$/,
   duration: /^([1-9]|[12][0-9]|30)s$/,
   fps: /^([1-9]|[12][0-9]|30)$/,
+  media: /^(print|screen)$/,
+  motion: /^(reduce)$/,
   quality: /^([1-9][0-9]?|100)$/,
   scroll: /^([\w-]+(?:;[\w-]+){0,19})$/,
 }
@@ -21,15 +25,23 @@ const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
   /^(?<base>https:\/\/[\w./]+)\/screenshots?/,
   /(?:\/(?<width>[0-9]+)x(?<height>[0-9]+))?/,
-  /(?:\/(?<options>[a-z]+=[\w.;-]+(?:,[a-z]+=[\w.;-]+)*))?/,
+  /(?:\/(?<options>[a-z-]+=[\w.;-]+(?:,[a-z-]+=[\w.;-]+)*))?/,
   /(?<path>\/.*?)/,
   /(?:@(?:(?<scale>[2-4])x|(?<resolution>240|360|480|720|1080|1440|2160)p|(?<uhd>4k)))?/,
   /(?:\.(?<format>(gif|mp4|pdf|png|webp)))?/,
   /(?<query>\?.*)?$/,
 )
 const VIDEO_FORMATS = ["gif", "mp4", "webp"]
-// GIFs have no quality setting, their size comes from the palette, and nor do PNGs or PDFs
-const QUALITY_FORMATS = ["mp4", "webp"]
+// Options only some formats use, which the others ignore rather than storing another copy that looks the same. GIFs have
+// no quality setting, their size comes from the palette, and PDFs are laid out for print while the rest are for screens
+const OPTION_FORMATS = {
+  duration: VIDEO_FORMATS,
+  fps: VIDEO_FORMATS,
+  "media=print": ["gif", "mp4", "png", "webp"],
+  "media=screen": ["pdf"],
+  quality: ["mp4", "webp"],
+  scroll: VIDEO_FORMATS,
+}
 
 const browserFor = (env) => env.BROWSER.get(env.BROWSER.idFromName("browser"))
 
@@ -46,29 +58,33 @@ function outputSize({ resolution, scale, uhd }) {
   return scale ? `@${scale}x` : ""
 }
 
-// The URL's parts, with options like duration=8s,scroll=2026;2025, or null when any option is unknown or invalid
+// The URL's parts, with options like duration=8s,scroll=2026;2025, or an error when any option is unknown or invalid
 function settingsFor(url) {
   const settings = { ...url.match(URL_PATTERN).groups }
 
   for (const option of settings.options?.split(",") ?? []) {
     const [name, value] = option.split("=")
-    const match = Object.hasOwn(OPTIONS, name) && value.match(OPTIONS[name])
 
-    if (!match) {
-      return null
+    if (!Object.hasOwn(OPTIONS, name)) {
+      return { error: `Unknown option: ${name}` }
     }
 
-    settings[name] = match[1]
-  }
+    const match = value.match(OPTIONS[name])
 
-  if (settings.quality && !QUALITY_FORMATS.includes(settings.format)) {
-    return null
+    if (!match) {
+      return { error: `Invalid ${name}: ${value}` }
+    }
+
+    if ((OPTION_FORMATS[option] ?? OPTION_FORMATS[name])?.includes(settings.format ?? DEFAULT_FORMAT) ?? true) {
+      // As colorScheme for color-scheme
+      settings[name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = match[1]
+    }
   }
 
   return settings
 }
 
-function cacheKey({ base, duration, format, fps, path, quality, query, resolution, scroll, width, height, scale, uhd }) {
+function cacheKey({ base, colorScheme, contrast, duration, format, fps, media, motion, path, quality, query, resolution, scroll, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -78,6 +94,10 @@ function cacheKey({ base, duration, format, fps, path, quality, query, resolutio
     duration ? `-${duration}s` : "",
     fps ? `-${fps}fps` : "",
     quality ? `-q${quality}` : "",
+    media ? `-${media}` : "",
+    colorScheme ? `-${colorScheme}` : "",
+    motion ? "-reduced-motion" : "",
+    contrast ? `-${contrast}-contrast` : "",
     scroll ? `-to-${scroll}` : "",
     outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
@@ -100,8 +120,13 @@ export default {
   async fetch(request, env, ctx) {
     const settings = settingsFor(request.url)
 
-    // Nothing to screenshot at the root, or with options that don't exist
-    if (!settings || settings.path === "/") {
+    // Say what's wrong with options that don't exist or are out of range, rather than ignoring a typo
+    if (settings.error) {
+      return new Response(settings.error, { status: 400, headers: { "Content-Type": "text/plain" } })
+    }
+
+    // Nothing to screenshot at the root
+    if (settings.path === "/") {
       return new Response(null, { status: 404 })
     }
 
@@ -149,7 +174,7 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, duration, format, fps, path, quality, resolution, scroll, width, height, scale } = {
+    const { base, colorScheme, contrast, duration, format, fps, media, motion, path, quality, resolution, scroll, width, height, scale } = {
       ...settings,
       scroll: settings.scroll?.split(";"),
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
@@ -203,7 +228,7 @@ export class Browser {
     let screenshot
 
     try {
-      const options = { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }
+      const options = { colorScheme, contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, width, zoom }
 
       // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
       screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
@@ -273,7 +298,7 @@ export class Browser {
   }
 
   // Each attempt gets a fresh context, so nothing from a failed one carries over
-  async render(url, { duration, external, format, fps, height, output, quality, scroll, shrink, width, zoom }) {
+  async render(url, { colorScheme, contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, width, zoom }) {
     const context = await this.browser.createBrowserContext()
 
     try {
@@ -287,6 +312,20 @@ export class Browser {
       }
 
       await page.setViewport({ width, height, deviceScaleFactor: Math.max(zoom, 1) })
+
+      // Emulate media queries like @media print or (prefers-color-scheme: dark). Puppeteer's own helper won't take
+      // prefers-contrast, so this goes to Chrome directly, on a session that stays open as long as the page
+      const features = [
+        colorScheme && { name: "prefers-color-scheme", value: colorScheme },
+        contrast && { name: "prefers-contrast", value: contrast },
+        motion && { name: "prefers-reduced-motion", value: motion },
+      ].filter((x) => x)
+
+      if (media || features.length) {
+        const session = await page.createCDPSession()
+
+        await session.send("Emulation.setEmulatedMedia", { media: media ?? "", features })
+      }
 
       if (VIDEO_FORMATS.includes(format)) {
         await prepare(page)

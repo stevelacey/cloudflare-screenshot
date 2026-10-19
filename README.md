@@ -43,6 +43,17 @@ To screenshot your homepage, request `home.png`, which captures `/`, e.g., `scre
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 
+To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/color-scheme=dark,motion=reduce/path/to/something.png`; these work for videos and PDFs too:
+
+| Option | Values | Media query |
+| :-- | :-- | :-- |
+| `color-scheme` | `light`, `dark` | `(prefers-color-scheme: dark)` |
+| `contrast` | `more`, `less` | `(prefers-contrast: more)` |
+| `media` | `print`, `screen` | `print` |
+| `motion` | `reduce` | `(prefers-reduced-motion: reduce)` |
+
+PDFs use your print styles unless you pass `media=screen`, and everything else uses screen styles unless you pass `media=print`.
+
 
 Environment variables
 ---------------------
@@ -73,7 +84,7 @@ Request `.mp4`, `.webp` or `.gif` to record the page, e.g., `screenshots/path/to
 
 Append a resolution to the filename to set the video's size, from `@240p`, `@360p`, `@480p`, `@720p`, `@1080p`, `@1440p` or `@4k`, e.g., `screenshots/path/to/something@480p.mp4`. The page is laid out at its usual size and the width follows its shape, so `@480p` of a 1280x720 page is 854x480.
 
-Options go after any dimensions, separated by commas, e.g., `screenshots/1024x768/duration=10s,scroll=features;pricing/path/to/something.mp4`:
+Videos take more options, alongside the media ones above, e.g., `screenshots/1024x768/duration=10s,scroll=features;pricing/path/to/something.mp4`:
 
 | Option | Example | Default | |
 | :-- | :-- | :-- | :-- |
@@ -83,6 +94,8 @@ Options go after any dimensions, separated by commas, e.g., `screenshots/1024x76
 | `scroll` | `scroll=features;pricing` | None | Element ids or positions like `2000px` to scroll to in turn, pausing at the top and at each one |
 
 Scrolling to an element respects its `scroll-margin-top`, and positions are from the top, so `scroll=2000px;0px` scrolls down and back up.
+
+Formats ignore options they don't use, like `quality` on a GIF or `duration` on a PNG, and serve the same file as without them. Options that don't exist or are out of range return a 400 saying which, so typos don't go unnoticed.
 
 | [![Travels](https://steve.ly/screenshots/travels@480p.webp?dark=on)](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s/travels@480p.webp?dark=on) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50,scroll=2026;2025;2024/travels@480p.webp?dark=on)](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.mp4?dark=on) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024/travels@480p.webp?dark=on) |
 | --: | --: | --: |
