@@ -5,12 +5,14 @@ import { prepare, record } from "./video"
 const BROWSER_CACHE_TTL = 7 * 24 * 60 * 60
 const BROWSER_IDLE_LIMIT = 10 * 60 * 1000
 const BROWSER_KEEP_ALIVE = 5
-const CONTENT_TYPES = { gif: "image/gif", mp4: "video/mp4", pdf: "application/pdf", png: "image/png", webp: "image/webp" }
+const CONTENT_TYPES = { gif: "image/gif", jpg: "image/jpeg", mp4: "video/mp4", pdf: "application/pdf", png: "image/png", webp: "image/webp" }
 const DEFAULT_DURATION = 5
 const DEFAULT_FORMAT = "png"
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 720
+const DEFAULT_QUALITY = 80
 const DEFAULT_SCALE = 1
+const ERROR_TTL = 5 * 60
 const OPTIONS = {
   "color-scheme": /^(light|dark)$/,
   contrast: /^(more|less)$/,
@@ -28,22 +30,22 @@ const URL_PATTERN = regexMerge(
   /(?:\/(?<options>[a-z-]+=[\w.;-]+(?:,[a-z-]+=[\w.;-]+)*))?/,
   /(?<path>\/.*?)/,
   /(?:@(?:(?<scale>[2-4])x|(?<resolution>240|360|480|720|1080|1440|2160)p|(?<uhd>4k)))?/,
-  /(?:\.(?<format>(gif|mp4|pdf|png|webp)))?/,
+  /(?:\.(?<format>(gif|jpg|mp4|pdf|png|webp)))?/,
   /(?<query>\?.*)?$/,
 )
 const VIDEO_FORMATS = ["gif", "mp4", "webp"]
-const STILL_FORMATS = ["pdf", "png"]
+const STILL_FORMATS = ["jpg", "pdf", "png"]
 // Options only some formats use, which the others ignore rather than storing another copy that looks the same. GIFs have
 // no quality setting, their size comes from the palette, PDFs are laid out for print while the rest are for screens, and
 // stills reduce motion to catch the page settled while videos record it moving
 const OPTION_FORMATS = {
   duration: VIDEO_FORMATS,
   fps: VIDEO_FORMATS,
-  "media=print": ["gif", "mp4", "png", "webp"],
+  "media=print": ["gif", "jpg", "mp4", "png", "webp"],
   "media=screen": ["pdf"],
   "motion=no-preference": STILL_FORMATS,
   "motion=reduce": VIDEO_FORMATS,
-  quality: ["mp4", "webp"],
+  quality: ["jpg", "mp4", "webp"],
   scroll: VIDEO_FORMATS,
 }
 
@@ -111,13 +113,35 @@ function cacheKey({ base, colorScheme, contrast, duration, format, fps, media, m
     .join("")
 }
 
-async function serveScreenshot(body, format) {
-  return new Response(body, {
-    headers: {
-      "Content-Type": CONTENT_TYPES[format || DEFAULT_FORMAT],
-      "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
-    },
-  })
+async function serveScreenshot(request, existing, format) {
+  const headers = {
+    "Content-Type": CONTENT_TYPES[format || DEFAULT_FORMAT],
+    "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
+    ETag: existing.httpEtag,
+    ...(existing.uploaded ? { "Last-Modified": new Date(existing.uploaded).toUTCString() } : {}),
+  }
+
+  // Browsers and crawlers that already have this copy only need telling it hasn't changed
+  if (existing.httpEtag && request.headers?.get("If-None-Match") === existing.httpEtag) {
+    return new Response(null, { status: 304, headers })
+  }
+
+  return new Response(existing.body, { headers })
+}
+
+// Deletes a stored screenshot so the next request makes a new one, for anyone holding PURGE_TOKEN
+async function purge(request, env, settings) {
+  const encoder = new TextEncoder()
+  const given = encoder.encode(request.headers?.get("Authorization") ?? "")
+  const expected = encoder.encode(`Bearer ${env.PURGE_TOKEN}`)
+
+  if (!env.PURGE_TOKEN || given.byteLength !== expected.byteLength || !crypto.subtle.timingSafeEqual(given, expected)) {
+    return new Response(null, { status: 401 })
+  }
+
+  await Promise.all([env.SCREENSHOTS.delete(cacheKey(settings)), caches.default.delete(request.url)])
+
+  return new Response(null, { status: 204 })
 }
 
 export default {
@@ -134,6 +158,10 @@ export default {
       return new Response(null, { status: 404 })
     }
 
+    if (request.method === "DELETE") {
+      return await purge(request, env, settings)
+    }
+
     // Check R2 bucket for existing screenshot
     const existing = await env.SCREENSHOTS.get(cacheKey(settings))
 
@@ -145,11 +173,31 @@ export default {
         ctx.waitUntil(browserFor(env).fetch(request.url))
       }
 
-      return await serveScreenshot(existing.body, settings.format)
+      return await serveScreenshot(request, existing, settings.format)
+    }
+
+    // A page that failed moments ago is likely to fail again, so that's remembered for a few minutes
+    const failed = await caches.default.match(request.url)
+
+    if (failed) {
+      return failed
     }
 
     // No existing screenshot, generate a new one
-    return await browserFor(env).fetch(request.url)
+    const response = await browserFor(env).fetch(request.url)
+
+    // Rate limits pass on their own, so they're left out
+    if (!response.ok && response.status !== 429) {
+      const headers = new Headers(response.headers)
+
+      headers.set("Cache-Control", `public, max-age=${ERROR_TTL}`)
+
+      const remember = (body) => caches.default.put(request.url, new Response(body, { status: response.status, headers }))
+
+      ctx.waitUntil(response.clone().arrayBuffer().then(remember))
+    }
+
+    return response
   },
 }
 
@@ -252,8 +300,10 @@ export class Browser {
       await this.storage.setAlarm(Date.now() + BROWSER_KEEP_ALIVE * 1000)
     }
 
+    let saved
+
     try {
-      await this.env.SCREENSHOTS.put(key, screenshot)
+      saved = await this.env.SCREENSHOTS.put(key, screenshot)
     } catch (e) {
       console.error(`Failed to save ${key}: ${e.message}`)
     }
@@ -263,6 +313,7 @@ export class Browser {
         "Cache-Control": `public, max-age=${BROWSER_CACHE_TTL}`,
         "Content-Type": CONTENT_TYPES[format],
         Expires: new Date(Date.now() + BROWSER_CACHE_TTL * 1000).toUTCString(),
+        ...(saved ? { ETag: saved.httpEtag, "Last-Modified": saved.uploaded.toUTCString() } : {}),
       },
     })
   }
@@ -367,6 +418,7 @@ export class Browser {
 
       return await page.screenshot({
         clip: { width, height, x: 0, y: 0, scale: shrink },
+        ...(format === "jpg" ? { type: "jpeg", quality: quality ?? DEFAULT_QUALITY } : {}),
       })
     } finally {
       await context.close().catch(() => {})

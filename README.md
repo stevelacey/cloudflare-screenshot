@@ -43,6 +43,8 @@ To screenshot your homepage, request `home.png`, which captures `/`, e.g., `scre
 
 Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4x` to the filename, e.g., `screenshots/path/to/something@2x.png`.
 
+Request `.jpg` for a JPEG, which is usually a fraction of the size of a PNG, at a quality of 80 unless you set one from 1 to 100, e.g., `screenshots/quality=60/path/to/something.jpg`.
+
 To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/color-scheme=dark,contrast=more/path/to/something.png`; these work for videos and PDFs too:
 
 | Option | Values | Media query |
@@ -65,6 +67,19 @@ Environment variables
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | | A Cloudflare Access service token, to screenshot a site behind Access |
 | `QUERY_PARAMS` | `dark=on` | Query params appended to every webserver request, to toggle behaviors for screenshots |
 | `EXTERNAL_DOMAINS` | `example.org,news.example.net` | Other sites to allow, requested like `screenshots/example.org/some/page.png`; they're never sent `QUERY_PARAMS` or your Cloudflare Access credentials |
+| `PURGE_TOKEN` | | A secret that lets you delete stored screenshots, see [Purging](#purging) |
+
+
+Purging
+-------
+
+Screenshots are stored for a week, then refreshed in the background the next time they're requested. To replace one sooner, send a `DELETE` for its URL with your `PURGE_TOKEN`, and the next request makes a new one:
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $PURGE_TOKEN" "https://example.com/screenshots/path/to/something.png?dark=on"
+```
+
+Each URL is stored separately, so purge each size, format and set of options you use. Pages that fail, like a 404, are remembered for five minutes rather than rendered on every request, and purging clears that too.
 
 
 Markup
@@ -92,7 +107,7 @@ Videos take more options, alongside the media ones above, e.g., `screenshots/102
 | :-- | :-- | :-- | :-- |
 | `duration` | `duration=10s` | `5s` | How long to record, up to 30 seconds |
 | `fps` | `fps=8` | `30` for MP4, `15` for WebP, `10` for GIF | Frames per second, up to 30; fewer record faster and make smaller files |
-| `quality` | `quality=60` | `80` | From 1 to 100, for MP4 and WebP |
+| `quality` | `quality=60` | `80` | From 1 to 100, for MP4 and WebP, and JPEG screenshots |
 | `scroll` | `scroll=features;pricing` | None | Element ids or positions like `2000px` to scroll to in turn, pausing at the top and at each one |
 
 Scrolling to an element respects its `scroll-margin-top`, and positions are from the top, so `scroll=2000px;0px` scrolls down and back up.

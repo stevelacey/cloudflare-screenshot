@@ -53,6 +53,7 @@ function createEnv(overrides = {}) {
     SCREENSHOTS: {
       get: vi.fn().mockResolvedValue(null),
       put: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
     },
     BROWSER: {
       idFromName: vi.fn((name) => name),
@@ -67,6 +68,9 @@ function createCtx() {
   return { waitUntil: vi.fn() }
 }
 
+// Workers have these, Node doesn't
+crypto.subtle.timingSafeEqual ??= (a, b) => Buffer.from(a).equals(Buffer.from(b))
+
 describe("worker.fetch", () => {
   let env
   let ctx
@@ -74,6 +78,13 @@ describe("worker.fetch", () => {
   beforeEach(() => {
     env = createEnv()
     ctx = createCtx()
+    globalThis.caches = {
+      default: {
+        match: vi.fn().mockResolvedValue(undefined),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(true),
+      },
+    }
   })
 
   it("returns an empty 404 for the root instead of screenshotting it", async () => {
@@ -307,6 +318,122 @@ describe("worker.fetch", () => {
     const response = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
 
     expect(response.status).toBe(502)
+    expect(await response.text()).toBe("boom")
+  })
+
+  it("remembers failures for a few minutes", async () => {
+    env.stub.fetch.mockResolvedValue(
+      new Response("Failed to render page: boom", { status: 500, headers: { "Cache-Control": "no-store", "Content-Type": "text/plain" } }),
+    )
+
+    await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
+    await ctx.waitUntil.mock.calls[0][0]
+
+    const [url, remembered] = caches.default.put.mock.calls[0]
+
+    expect(url).toBe("https://example.com/screenshot/foo/bar.png")
+    expect(remembered.status).toBe(500)
+    expect(remembered.headers.get("Cache-Control")).toBe("public, max-age=300")
+    expect(remembered.headers.get("Content-Type")).toBe("text/plain")
+    expect(await remembered.text()).toBe("Failed to render page: boom")
+  })
+
+  it("remembers error pages passed through from the site", async () => {
+    env.stub.fetch.mockResolvedValue(new Response(null, { status: 404 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
+    await ctx.waitUntil.mock.calls[0][0]
+
+    const [, remembered] = caches.default.put.mock.calls[0]
+
+    expect(remembered.status).toBe(404)
+    expect(remembered.headers.get("Cache-Control")).toBe("public, max-age=300")
+    expect(await remembered.text()).toBe("")
+  })
+
+  it("serves a remembered failure without rendering again", async () => {
+    caches.default.match.mockResolvedValue(new Response(null, { status: 404 }))
+
+    const response = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
+
+    expect(response.status).toBe(404)
+    expect(caches.default.match).toHaveBeenCalledWith("https://example.com/screenshot/foo/bar.png")
+    expect(env.stub.fetch).not.toHaveBeenCalled()
+  })
+
+  it("doesn't remember successes or rate limits", async () => {
+    for (const status of [200, 429]) {
+      env.stub.fetch.mockResolvedValue(new Response("bytes", { status }))
+
+      await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png" }, env, ctx)
+    }
+
+    expect(ctx.waitUntil).not.toHaveBeenCalled()
+  })
+
+  it("tells clients with the current copy that it hasn't changed", async () => {
+    const uploaded = new Date("2026-10-01T00:00:00Z")
+    env.SCREENSHOTS.get.mockResolvedValue({ body: "cached-bytes", uploaded, httpEtag: '"abc"' })
+
+    const fresh = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png", headers: new Headers() }, env, ctx)
+    const unchanged = await worker.fetch({ url: "https://example.com/screenshot/foo/bar.png", headers: new Headers({ "If-None-Match": '"abc"' }) }, env, ctx)
+
+    expect(fresh.status).toBe(200)
+    expect(fresh.headers.get("ETag")).toBe('"abc"')
+    expect(fresh.headers.get("Last-Modified")).toBe(uploaded.toUTCString())
+    expect(unchanged.status).toBe(304)
+    expect(unchanged.headers.get("ETag")).toBe('"abc"')
+    expect(await unchanged.text()).toBe("")
+  })
+
+  it("serves JPEGs", async () => {
+    env.SCREENSHOTS.get.mockResolvedValue({ body: "cached-bytes", uploaded: new Date().toISOString() })
+
+    const response = await worker.fetch({ url: "https://example.com/screenshot/quality=60/foo/bar.jpg" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get).toHaveBeenCalledWith("example.com/foo/bar-q60.jpg")
+    expect(response.headers.get("Content-Type")).toBe("image/jpeg")
+  })
+
+  describe("purging", () => {
+    const purge = (authorization) =>
+      worker.fetch(
+        {
+          url: "https://example.com/screenshot/color-scheme=dark/foo/bar.png?a=b",
+          method: "DELETE",
+          headers: new Headers(authorization ? { Authorization: authorization } : {}),
+        },
+        env,
+        ctx,
+      )
+
+    it("deletes the stored screenshot and any remembered failure", async () => {
+      env.PURGE_TOKEN = "secret"
+
+      const response = await purge("Bearer secret")
+
+      expect(response.status).toBe(204)
+      expect(env.SCREENSHOTS.delete).toHaveBeenCalledWith("example.com/foo/bar-dark.png?a=b")
+      expect(caches.default.delete).toHaveBeenCalledWith("https://example.com/screenshot/color-scheme=dark/foo/bar.png?a=b")
+      expect(env.stub.fetch).not.toHaveBeenCalled()
+    })
+
+    it("refuses without the right token", async () => {
+      for (const [token, authorization] of [
+        [undefined, "Bearer undefined"],
+        ["secret", undefined],
+        ["secret", "Bearer secreT"],
+        ["secret", "Bearer secret2"],
+      ]) {
+        env.PURGE_TOKEN = token
+
+        const response = await purge(authorization)
+
+        expect(response.status).toBe(401)
+      }
+
+      expect(env.SCREENSHOTS.delete).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -329,6 +456,26 @@ describe("Browser", () => {
     await browser.fetch({ url: "https://example.com/screenshot/1200x630/foo/bar.png?dark=on" })
 
     expect(env.SCREENSHOTS.put).toHaveBeenCalledWith("example.com/foo/bar-1200x630.png?dark=on", "png-bytes")
+  })
+
+  it("sends the saved copy's ETag", async () => {
+    const uploaded = new Date("2026-10-01T00:00:00Z")
+    env.SCREENSHOTS.put.mockResolvedValue({ httpEtag: '"abc"', uploaded })
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar" })
+
+    expect(response.headers.get("ETag")).toBe('"abc"')
+    expect(response.headers.get("Last-Modified")).toBe(uploaded.toUTCString())
+  })
+
+  it("takes JPEGs at the requested quality", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/foo/bar.jpg" })
+    await browser.fetch({ url: "https://example.com/screenshot/quality=60/foo/bar.jpg" })
+
+    expect(instance.page.screenshot.mock.calls.map(([options]) => [options.type, options.quality])).toEqual([
+      ["jpeg", 80],
+      ["jpeg", 60],
+    ])
   })
 
   it("still serves a screenshot it could not save", async () => {
