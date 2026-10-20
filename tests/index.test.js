@@ -21,6 +21,7 @@ function createMockPage() {
     setViewport: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue({ ok: () => true, status: () => 200 }),
     waitForNetworkIdle: vi.fn().mockResolvedValue(undefined),
+    evaluate: vi.fn().mockResolvedValue(undefined),
     pdf: vi.fn().mockResolvedValue("pdf-bytes"),
     screenshot: vi.fn().mockResolvedValue("png-bytes"),
     close: vi.fn().mockResolvedValue(undefined),
@@ -515,6 +516,7 @@ describe("Browser", () => {
     })
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "load" })
     expect(instance.page.waitForNetworkIdle).toHaveBeenCalled()
+    expect(instance.page.evaluate).toHaveBeenCalledWith("document.fonts.ready")
     expect(instance.page.screenshot).toHaveBeenCalledWith({
       clip: { width: 1280, height: 720, x: 0, y: 0, scale: 1 },
     })

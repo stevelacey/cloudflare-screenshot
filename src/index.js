@@ -396,6 +396,7 @@ export class Browser {
       // Wait for requests to finish rather than for Chrome to call the page idle, which a busy page like one drawing
       // WebGL without a GPU never reaches
       await page.waitForNetworkIdle()
+      await page.evaluate("document.fonts.ready")
 
       if (VIDEO_FORMATS.includes(format)) {
         return await record(page, {
