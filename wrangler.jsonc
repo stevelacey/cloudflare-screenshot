@@ -4,8 +4,9 @@
   "browser": {
     "binding": "MYBROWSER"
   },
-  "compatibility_date": "2024-04-19",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-03-17",
+  // @cloudflare/puppeteer reads browser messages as ArrayBuffers, which newer dates turn into Blobs
+  "compatibility_flags": ["nodejs_compat", "no_websocket_standard_binary_type"],
   "durable_objects": {
     "bindings": [
       {
