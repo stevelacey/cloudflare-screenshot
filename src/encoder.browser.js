@@ -110,7 +110,9 @@ const animate = (frames, width, height) => {
 }
 
 window.__encoder = {
-  async start({ format, width, height, fps, quality }) {
+  async start({ effect, format, width, height, fps, frames, quality }) {
+    this.effect = effect && window.__effects[effect]
+    this.timing = { fps, frames }
     this.fps = fps
     this.quality = quality
     this.elapsed = 0
@@ -133,13 +135,27 @@ window.__encoder = {
 
   async add(data, count) {
     const bitmap = await createImageBitmap(new Blob([decode(data)], { type: "image/png" }))
+
+    // An effect changes every frame, even when the page doesn't
+    if (this.effect) {
+      for (let i = 0; i < count; i++) {
+        this.context.drawImage(bitmap, 0, 0)
+        this.effect(this.context, { ...this.timing, frame: this.elapsed })
+        await this.emit(1)
+      }
+    } else {
+      this.context.drawImage(bitmap, 0, 0)
+      await this.emit(count)
+    }
+
+    bitmap.close()
+  },
+
+  async emit(count) {
     // Whole milliseconds that add up to the true running time
     const duration = Math.round(((this.elapsed + count) * 1000) / this.fps) - Math.round((this.elapsed * 1000) / this.fps)
 
     this.elapsed += count
-
-    this.context.drawImage(bitmap, 0, 0)
-    bitmap.close()
 
     if (this.webp) {
       const blob = await this.canvas.convertToBlob({ type: "image/webp", quality: this.quality / 100 })

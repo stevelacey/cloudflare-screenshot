@@ -102,6 +102,7 @@ Videos take more options, alongside the media ones above, e.g., `screenshots/102
 | Option | Values | Default | |
 | :-- | :-- | :-- | :-- |
 | `duration` | `1s` to `30s` | `5s` | How long to record |
+| `effect` | `crt`, `film`, `glitch`, `power`, `shine`, `vhs` | None | Animates even a still page, see [Effects](#effects) |
 | `fps` | `1` to `30` | `30` for MP4, `15` for WebP, `10` for GIF | Frames per second; fewer record faster and make smaller files |
 | `quality` | `1` to `100` | `80` | For MP4 and WebP, and JPEG screenshots |
 | `scroll` | Element ids or positions, e.g., `features;2000px` | None | Where to scroll to in turn, pausing at the top and at each one |
@@ -121,6 +122,16 @@ For a video card, add tags like these:
 <meta property="og:video:height" content="480">
 <meta property="og:video:type" content="video/mp4">
 ```
+
+
+Effects
+-------
+
+Add an `effect` to a video to animate even a still page, e.g., `screenshots/effect=crt/path/to/something.mp4`:
+
+| [![crt](https://steve.ly/screenshots/effect=crt,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=crt,theme=dark/home@480p.mp4?nav=off) **`crt`** [🎬 MP4](https://steve.ly/screenshots/effect=crt,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=crt,quality=50,theme=dark/home@480p.webp?nav=off) | [![film](https://steve.ly/screenshots/effect=film,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=film,theme=dark/home@480p.mp4?nav=off) **`film`** [🎬 MP4](https://steve.ly/screenshots/effect=film,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=film,quality=50,theme=dark/home@480p.webp?nav=off) | [![glitch](https://steve.ly/screenshots/effect=glitch,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=glitch,theme=dark/home@480p.mp4?nav=off) **`glitch`** [🎬 MP4](https://steve.ly/screenshots/effect=glitch,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=glitch,quality=50,theme=dark/home@480p.webp?nav=off) |
+| --: | --: | --: |
+| [![power](https://steve.ly/screenshots/effect=power,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=power,theme=dark/home@480p.mp4?nav=off) **`power`** [🎬 MP4](https://steve.ly/screenshots/effect=power,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=power,quality=50,theme=dark/home@480p.webp?nav=off) | [![shine](https://steve.ly/screenshots/effect=shine,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=shine,theme=dark/home@480p.mp4?nav=off) **`shine`** [🎬 MP4](https://steve.ly/screenshots/effect=shine,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=shine,quality=50,theme=dark/home@480p.webp?nav=off) | [![vhs](https://steve.ly/screenshots/effect=vhs,quality=50,theme=dark/home@480p.webp?nav=off)](https://steve.ly/screenshots/effect=vhs,theme=dark/home@480p.mp4?nav=off) **`vhs`** [🎬 MP4](https://steve.ly/screenshots/effect=vhs,theme=dark/home@480p.mp4?nav=off) [🖼️ WebP](https://steve.ly/screenshots/effect=vhs,quality=50,theme=dark/home@480p.webp?nav=off) |
 
 
 Debugging

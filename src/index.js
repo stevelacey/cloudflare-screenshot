@@ -18,6 +18,7 @@ const ALIASES = { "color-scheme": "theme" }
 const OPTIONS = {
   contrast: /^(more|less)$/,
   duration: /^([1-9]|[12][0-9]|30)s$/,
+  effect: /^(crt|film|glitch|power|shine|vhs)$/,
   fps: /^([1-9]|[12][0-9]|30)$/,
   media: /^(print|screen)$/,
   motion: /^(reduce|no-preference)$/,
@@ -42,6 +43,7 @@ const STILL_FORMATS = ["jpg", "pdf", "png"]
 // stills reduce motion to catch the page settled while videos record it moving
 const OPTION_FORMATS = {
   duration: VIDEO_FORMATS,
+  effect: VIDEO_FORMATS,
   fps: VIDEO_FORMATS,
   "media=print": ["gif", "jpg", "mp4", "png", "webp"],
   "media=screen": ["pdf"],
@@ -92,7 +94,26 @@ function settingsFor(url) {
   return settings
 }
 
-function cacheKey({ base, contrast, duration, format, fps, media, motion, path, quality, query, resolution, scroll, theme, width, height, scale, uhd }) {
+function cacheKey({
+  base,
+  contrast,
+  duration,
+  effect,
+  format,
+  fps,
+  media,
+  motion,
+  path,
+  quality,
+  query,
+  resolution,
+  scroll,
+  theme,
+  width,
+  height,
+  scale,
+  uhd,
+}) {
   const { hostname } = new URL(base)
 
   return [
@@ -107,6 +128,7 @@ function cacheKey({ base, contrast, duration, format, fps, media, motion, path, 
     motion ? `-${motion}-motion` : "",
     contrast ? `-${contrast}-contrast` : "",
     scroll ? `-to-${scroll}` : "",
+    effect ? `-${effect}` : "",
     outputSize({ resolution, scale, uhd }),
     `.${format || DEFAULT_FORMAT}`,
     query,
@@ -228,7 +250,7 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, contrast, duration, format, fps, media, motion, path, quality, resolution, scroll, theme, width, height, scale } = {
+    const { base, contrast, duration, effect, format, fps, media, motion, path, quality, resolution, scroll, theme, width, height, scale } = {
       ...settings,
       scroll: settings.scroll?.split(";"),
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
@@ -283,7 +305,7 @@ export class Browser {
     let screenshot
 
     try {
-      const options = { contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }
+      const options = { contrast, duration, effect, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }
 
       // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
       screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
@@ -356,7 +378,7 @@ export class Browser {
   }
 
   // Each attempt gets a fresh context, so nothing from a failed one carries over
-  async render(url, { contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }) {
+  async render(url, { contrast, duration, effect, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }) {
     const context = await this.browser.createBrowserContext()
 
     try {
@@ -405,6 +427,7 @@ export class Browser {
           format,
           ...output,
           duration,
+          effect,
           fps,
           quality,
           scroll,

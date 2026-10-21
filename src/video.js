@@ -1,4 +1,5 @@
 import clock from "./clock.browser.js"
+import effects from "./effects.browser.js"
 import encoderSource from "./encoder.browser.js"
 import gifenc from "./gifenc.browser.js"
 import h264 from "./h264.browser.js"
@@ -234,7 +235,7 @@ async function capture(page, encoder, { clip, duration, fps, parts }) {
   }
 }
 
-export async function record(page, { format, width, height, duration, clip, fps = FRAME_RATES[format], quality = QUALITY, scroll }) {
+export async function record(page, { format, width, height, duration, clip, effect, fps = FRAME_RATES[format], quality = QUALITY, scroll }) {
   // H.264 needs even dimensions
   const size = format === "mp4" ? { width: width - (width % 2), height: height - (height % 2) } : { width, height }
 
@@ -245,9 +246,10 @@ export async function record(page, { format, width, height, duration, clip, fps 
       await encoder.evaluate(LIBRARIES[format])
     }
 
+    await encoder.evaluate(effects)
     await encoder.evaluate(encoderSource)
 
-    await encoder.evaluate((options) => window.__encoder.start(options), { format, fps, quality, ...size })
+    await encoder.evaluate((options) => window.__encoder.start(options), { effect, format, fps, frames: duration * fps, quality, ...size })
 
     // Background tabs stop painting, which stalls screenshots
     await page.bringToFront()

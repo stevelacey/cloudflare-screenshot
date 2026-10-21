@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { optimize, prepare, record } from "../src/video.js"
 
 vi.mock("../src/clock.browser.js", () => ({ default: "clock-source" }))
+vi.mock("../src/effects.browser.js", () => ({ default: "effects-source" }))
 vi.mock("../src/encoder.browser.js", () => ({ default: "encoder-source" }))
 vi.mock("../src/gifenc.browser.js", () => ({ default: "gifenc-source" }))
 vi.mock("../src/h264.browser.js", () => ({ default: "h264-source" }))
@@ -136,7 +137,7 @@ describe("record", () => {
     expect(page.encoderPage.evaluate).toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
     expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith("h264-source")
     expect(page.encoderPage.evaluate).toHaveBeenCalledWith("encoder-source")
-    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "gif", fps: 10, quality: 80, width: 1281, height: 721 })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "gif", fps: 10, frames: 10, quality: 80, width: 1281, height: 721 })
     expect(page.window.__encoder.add.mock.calls).toEqual([
       ["a", 3],
       ["b", 7],
@@ -151,7 +152,7 @@ describe("record", () => {
     expect(Buffer.from(bytes).toString()).toBe("webp-bytes")
     expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith("h264-source")
     expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
-    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, quality: 80, width: 1281, height: 721 })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, frames: 15, quality: 80, width: 1281, height: 721 })
     expect(page.window.__encoder.add.mock.calls).toEqual([["a", 15]])
   })
 
@@ -161,7 +162,7 @@ describe("record", () => {
     await record(page, { format: "webp", width: 640, height: 360, duration: 1, fps: 8, quality: 60 })
 
     expect(page.window.__clock.advance.mock.calls).toEqual([[0], ...Array(7).fill([125])])
-    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 8, quality: 60, width: 640, height: 360 })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 8, frames: 8, quality: 60, width: 640, height: 360 })
     expect(page.window.__encoder.add.mock.calls).toEqual([["a", 8]])
   })
 
@@ -172,7 +173,7 @@ describe("record", () => {
     await record(page, { format: "webp", width: 640, height: 360, duration: 1 / 15, clip })
 
     expect(page.session.send).toHaveBeenCalledWith("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip })
-    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, quality: 80, width: 640, height: 360 })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "webp", fps: 15, frames: 1, quality: 80, width: 640, height: 360 })
   })
 
   it("loads the page down to the stop, then pauses, scrolls smoothly to it, and pauses again", async () => {
@@ -248,6 +249,15 @@ describe("record", () => {
     )
   })
 
+  it("loads the effects and tells the encoder which to use", async () => {
+    const page = createPage(Array(10).fill("a"), base64("gif-bytes"))
+
+    await record(page, { format: "gif", width: 10, height: 10, duration: 1, effect: "crt" })
+
+    expect(page.encoderPage.evaluate).toHaveBeenCalledWith("effects-source")
+    expect(page.window.__encoder.start).toHaveBeenCalledWith(expect.objectContaining({ effect: "crt", frames: 10 }))
+  })
+
   it("leaves the page where it is without a scroll", async () => {
     const page = createPage(Array(10).fill("a"), base64("gif-bytes"))
 
@@ -267,7 +277,7 @@ describe("record", () => {
     expect(Buffer.from(bytes)).toEqual(Buffer.concat([ftyp, moov([ftyp.length + 8 + moov([0], colr).length], colr), mdat]))
     expect(page.encoderPage.evaluate).toHaveBeenCalledWith("h264-source")
     expect(page.encoderPage.evaluate).not.toHaveBeenCalledWith(expect.stringContaining("gifenc-source"))
-    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "mp4", fps: 30, quality: 80, width: 1280, height: 720 })
+    expect(page.window.__encoder.start).toHaveBeenCalledWith({ format: "mp4", fps: 30, frames: 60, quality: 80, width: 1280, height: 720 })
     expect(page.window.__encoder.add.mock.calls).toEqual([["a", 60]])
   })
 })

@@ -233,6 +233,15 @@ describe("worker.fetch", () => {
     expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark.png"], ["example.com/foo/bar-dark.png"]])
   })
 
+  it("includes the effect in the cache key", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/effect=crt/foo/bar.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/effect=crt/foo/bar.png" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-crt.mp4"], ["example.com/foo/bar.png"]])
+  })
+
   it("ignores options the format doesn't use, storing them as the same file", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
@@ -715,6 +724,12 @@ describe("Browser", () => {
 
     expect(record).toHaveBeenCalledWith(instance.page, { format: "webp", width: 1280, height: 720, duration: 5 })
     expect(response.headers.get("Content-Type")).toBe("image/webp")
+  })
+
+  it("records with an effect", async () => {
+    await browser.fetch({ url: "https://example.com/screenshot/effect=glitch/foo/bar.mp4" })
+
+    expect(record).toHaveBeenCalledWith(instance.page, expect.objectContaining({ effect: "glitch" }))
   })
 
   it("scrolls to each stop while recording", async () => {
