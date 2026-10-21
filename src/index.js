@@ -13,8 +13,9 @@ const DEFAULT_HEIGHT = 720
 const DEFAULT_QUALITY = 80
 const DEFAULT_SCALE = 1
 const ERROR_TTL = 5 * 60
+// Old names for options, still understood
+const ALIASES = { "color-scheme": "theme" }
 const OPTIONS = {
-  "color-scheme": /^(light|dark)$/,
   contrast: /^(more|less)$/,
   duration: /^([1-9]|[12][0-9]|30)s$/,
   fps: /^([1-9]|[12][0-9]|30)$/,
@@ -22,6 +23,7 @@ const OPTIONS = {
   motion: /^(reduce|no-preference)$/,
   quality: /^([1-9][0-9]?|100)$/,
   scroll: /^([\w-]+(?:;[\w-]+){0,19})$/,
+  theme: /^(light|dark)$/,
 }
 const STORAGE_TTL = 7 * 24 * 60 * 60
 const URL_PATTERN = regexMerge(
@@ -69,28 +71,28 @@ function settingsFor(url) {
   const settings = { ...url.match(URL_PATTERN).groups }
 
   for (const option of settings.options?.split(",") ?? []) {
-    const [name, value] = option.split("=")
+    const [given, value] = option.split("=")
+    const name = Object.hasOwn(ALIASES, given) ? ALIASES[given] : given
 
     if (!Object.hasOwn(OPTIONS, name)) {
-      return { error: `Unknown option: ${name}` }
+      return { error: `Unknown option: ${given}` }
     }
 
     const match = value.match(OPTIONS[name])
 
     if (!match) {
-      return { error: `Invalid ${name}: ${value}` }
+      return { error: `Invalid ${given}: ${value}` }
     }
 
-    if ((OPTION_FORMATS[option] ?? OPTION_FORMATS[name])?.includes(settings.format ?? DEFAULT_FORMAT) ?? true) {
-      // As colorScheme for color-scheme
-      settings[name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = match[1]
+    if ((OPTION_FORMATS[`${name}=${value}`] ?? OPTION_FORMATS[name])?.includes(settings.format ?? DEFAULT_FORMAT) ?? true) {
+      settings[name] = match[1]
     }
   }
 
   return settings
 }
 
-function cacheKey({ base, colorScheme, contrast, duration, format, fps, media, motion, path, quality, query, resolution, scroll, width, height, scale, uhd }) {
+function cacheKey({ base, contrast, duration, format, fps, media, motion, path, quality, query, resolution, scroll, theme, width, height, scale, uhd }) {
   const { hostname } = new URL(base)
 
   return [
@@ -101,7 +103,7 @@ function cacheKey({ base, colorScheme, contrast, duration, format, fps, media, m
     fps ? `-${fps}fps` : "",
     quality ? `-q${quality}` : "",
     media ? `-${media}` : "",
-    colorScheme ? `-${colorScheme}` : "",
+    theme ? `-${theme}` : "",
     motion ? `-${motion}-motion` : "",
     contrast ? `-${contrast}-contrast` : "",
     scroll ? `-to-${scroll}` : "",
@@ -226,7 +228,7 @@ export class Browser {
   }
 
   async generate(settings, key) {
-    const { base, colorScheme, contrast, duration, format, fps, media, motion, path, quality, resolution, scroll, width, height, scale } = {
+    const { base, contrast, duration, format, fps, media, motion, path, quality, resolution, scroll, theme, width, height, scale } = {
       ...settings,
       scroll: settings.scroll?.split(";"),
       duration: parseInt(settings.duration ?? DEFAULT_DURATION, 10),
@@ -281,7 +283,7 @@ export class Browser {
     let screenshot
 
     try {
-      const options = { colorScheme, contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, width, zoom }
+      const options = { contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }
 
       // Recordings take minutes and work the browser hard enough that several at once crash it, so they take turns
       screenshot = await (VIDEO_FORMATS.includes(format) ? this.queue(() => this.attempt(url, options)) : this.attempt(url, options))
@@ -354,7 +356,7 @@ export class Browser {
   }
 
   // Each attempt gets a fresh context, so nothing from a failed one carries over
-  async render(url, { colorScheme, contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, width, zoom }) {
+  async render(url, { contrast, duration, external, format, fps, height, media, motion, output, quality, scroll, shrink, theme, width, zoom }) {
     const context = await this.browser.createBrowserContext()
 
     try {
@@ -372,7 +374,7 @@ export class Browser {
       // Emulate media queries like @media print or (prefers-color-scheme: dark). Puppeteer's own helper won't take
       // prefers-contrast, so this goes to Chrome directly, on a session that stays open as long as the page
       const features = [
-        colorScheme && { name: "prefers-color-scheme", value: colorScheme },
+        theme && { name: "prefers-color-scheme", value: theme },
         contrast && { name: "prefers-contrast", value: contrast },
         motion && { name: "prefers-reduced-motion", value: motion },
       ].filter((x) => x)

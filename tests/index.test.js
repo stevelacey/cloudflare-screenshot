@@ -209,10 +209,28 @@ describe("worker.fetch", () => {
   it("includes emulated media in the cache key", async () => {
     env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
 
-    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce,color-scheme=dark/foo/bar.mp4" }, env, ctx)
-    await worker.fetch({ url: "https://example.com/screenshot/media=print,contrast=more,color-scheme=light/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/motion=reduce,theme=dark/foo/bar.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=print,contrast=more,theme=light/foo/bar.png" }, env, ctx)
 
     expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark-reduce-motion.mp4"], ["example.com/foo/bar-print-light-more-contrast.png"]])
+  })
+
+  it("stores options given in any order as the same file", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/duration=10s,quality=50,theme=dark/foo/bar.mp4" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/theme=dark,quality=50,duration=10s/foo/bar.mp4" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-10s-q50-dark.mp4"], ["example.com/foo/bar-10s-q50-dark.mp4"]])
+  })
+
+  it("still takes color-scheme, the old name for theme, storing it as the same file", async () => {
+    env.stub.fetch.mockResolvedValue(new Response("bytes", { status: 200 }))
+
+    await worker.fetch({ url: "https://example.com/screenshot/color-scheme=dark/foo/bar.png" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/theme=dark/foo/bar.png" }, env, ctx)
+
+    expect(env.SCREENSHOTS.get.mock.calls).toEqual([["example.com/foo/bar-dark.png"], ["example.com/foo/bar-dark.png"]])
   })
 
   it("ignores options the format doesn't use, storing them as the same file", async () => {
@@ -220,7 +238,7 @@ describe("worker.fetch", () => {
 
     await worker.fetch({ url: "https://example.com/screenshot/quality=50/foo/bar.gif" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/quality=50,duration=10s,fps=8,scroll=a/foo/bar" }, env, ctx)
-    await worker.fetch({ url: "https://example.com/screenshot/media=print,color-scheme=dark/foo/bar.pdf" }, env, ctx)
+    await worker.fetch({ url: "https://example.com/screenshot/media=print,theme=dark/foo/bar.pdf" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.png" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/media=screen/foo/bar.pdf" }, env, ctx)
     await worker.fetch({ url: "https://example.com/screenshot/motion=reduce/foo/bar.png" }, env, ctx)
@@ -275,6 +293,7 @@ describe("worker.fetch", () => {
       "fps=15fps",
       "quality=0",
       "quality=101",
+      "theme=blue",
       "color-scheme=blue",
       "colorscheme=dark",
       "prefers-color-scheme=dark",
@@ -400,7 +419,7 @@ describe("worker.fetch", () => {
     const purge = (authorization) =>
       worker.fetch(
         {
-          url: "https://example.com/screenshot/color-scheme=dark/foo/bar.png?a=b",
+          url: "https://example.com/screenshot/theme=dark/foo/bar.png?a=b",
           method: "DELETE",
           headers: new Headers(authorization ? { Authorization: authorization } : {}),
         },
@@ -415,7 +434,7 @@ describe("worker.fetch", () => {
 
       expect(response.status).toBe(204)
       expect(env.SCREENSHOTS.delete).toHaveBeenCalledWith("example.com/foo/bar-dark.png?a=b")
-      expect(caches.default.delete).toHaveBeenCalledWith("https://example.com/screenshot/color-scheme=dark/foo/bar.png?a=b")
+      expect(caches.default.delete).toHaveBeenCalledWith("https://example.com/screenshot/theme=dark/foo/bar.png?a=b")
       expect(env.stub.fetch).not.toHaveBeenCalled()
     })
 
@@ -712,7 +731,7 @@ describe("Browser", () => {
   })
 
   it("emulates the requested media type and features", async () => {
-    await browser.fetch({ url: "https://example.com/screenshot/media=print,color-scheme=dark,contrast=less,motion=reduce/foo/bar.png" })
+    await browser.fetch({ url: "https://example.com/screenshot/media=print,theme=dark,contrast=less,motion=reduce/foo/bar.png" })
 
     expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
       media: "print",
@@ -726,7 +745,7 @@ describe("Browser", () => {
   })
 
   it("emulates features without changing the media type", async () => {
-    await browser.fetch({ url: "https://example.com/screenshot/color-scheme=dark/foo/bar.mp4" })
+    await browser.fetch({ url: "https://example.com/screenshot/theme=dark/foo/bar.mp4" })
 
     expect(instance.page.session.send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", {
       media: "",

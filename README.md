@@ -45,18 +45,14 @@ Additionally, you can adjust the pixel density by appending `@2x`, `@3x`, or `@4
 
 Request `.jpg` for a JPEG, which is usually a fraction of the size of a PNG, at a quality of 80 unless you set one from 1 to 100, e.g., `screenshots/quality=60/path/to/something.jpg`.
 
-To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/color-scheme=dark,contrast=more/path/to/something.png`; these work for videos and PDFs too:
+To trigger your site's media queries, add options after any dimensions, separated by commas, e.g., `screenshots/1024x768/contrast=more,theme=dark/path/to/something.png`; these work for videos and PDFs too:
 
-| Option | Values | Media query |
-| :-- | :-- | :-- |
-| `color-scheme` | `light`, `dark` | `(prefers-color-scheme: dark)` |
-| `contrast` | `more`, `less` | `(prefers-contrast: more)` |
-| `media` | `print`, `screen` | `print` |
-| `motion` | `reduce`, `no-preference` | `(prefers-reduced-motion: reduce)` |
-
-PDFs use your print styles unless you pass `media=screen`, and everything else uses screen styles unless you pass `media=print`.
-
-Screenshots and PDFs reduce motion, so they catch the page settled rather than halfway through an animation, unless you pass `motion=no-preference`. Videos record the page moving unless you pass `motion=reduce`.
+| Option | Values | Default | |
+| :-- | :-- | :-- | :-- |
+| `contrast` | `more`, `less` | None | Sets `prefers-contrast` |
+| `media` | `print`, `screen` | `print` for PDFs, `screen` otherwise | Picks which `@media` styles apply |
+| `motion` | `reduce`, `no-preference` | `reduce` for screenshots and PDFs, `no-preference` for videos | Sets `prefers-reduced-motion`; reducing it catches the page settled rather than halfway through an animation |
+| `theme` | `light`, `dark` | `light` | Sets `prefers-color-scheme` |
 
 
 Environment variables
@@ -65,9 +61,9 @@ Environment variables
 | Variable | Example | |
 | :-- | :-- | :-- |
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | | A Cloudflare Access service token, to screenshot a site behind Access |
-| `QUERY_PARAMS` | `dark=on` | Query params appended to every webserver request, to toggle behaviors for screenshots |
 | `EXTERNAL_DOMAINS` | `example.org,news.example.net` | Other sites to allow, requested like `screenshots/example.org/some/page.png`; they're never sent `QUERY_PARAMS` or your Cloudflare Access credentials |
 | `PURGE_TOKEN` | | A secret that lets you delete stored screenshots, see [Purging](#purging) |
+| `QUERY_PARAMS` | `dark=on` | Query params appended to every webserver request, to toggle behaviors for screenshots |
 
 
 Purging
@@ -103,24 +99,24 @@ Append a resolution to the filename to set the video's size, from `@240p`, `@360
 
 Videos take more options, alongside the media ones above, e.g., `screenshots/1024x768/duration=10s,scroll=features;pricing/path/to/something.mp4`:
 
-| Option | Example | Default | |
+| Option | Values | Default | |
 | :-- | :-- | :-- | :-- |
-| `duration` | `duration=10s` | `5s` | How long to record, up to 30 seconds |
-| `fps` | `fps=8` | `30` for MP4, `15` for WebP, `10` for GIF | Frames per second, up to 30; fewer record faster and make smaller files |
-| `quality` | `quality=60` | `80` | From 1 to 100, for MP4 and WebP, and JPEG screenshots |
-| `scroll` | `scroll=features;pricing` | None | Element ids or positions like `2000px` to scroll to in turn, pausing at the top and at each one |
+| `duration` | `1s` to `30s` | `5s` | How long to record |
+| `fps` | `1` to `30` | `30` for MP4, `15` for WebP, `10` for GIF | Frames per second; fewer record faster and make smaller files |
+| `quality` | `1` to `100` | `80` | For MP4 and WebP, and JPEG screenshots |
+| `scroll` | Element ids or positions, e.g., `features;2000px` | None | Where to scroll to in turn, pausing at the top and at each one |
 
 Scrolling to an element respects its `scroll-margin-top`, and positions are from the top, so `scroll=2000px;0px` scrolls down and back up.
 
 Formats ignore options they don't use, like `quality` on a GIF or `duration` on a PNG, and serve the same file as without them. Options that don't exist or are out of range return a 400 saying which, so typos don't go unnoticed.
 
-| [![Travels](https://steve.ly/screenshots/color-scheme=dark/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/color-scheme=dark,duration=10s,quality=50/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark,duration=10s/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/color-scheme=dark,duration=10s,quality=50,scroll=2026;2025;2024/travels@480p.webp)](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/color-scheme=dark,duration=10s,scroll=2026;2025;2024/travels@480p.webp) |
+| [![Travels](https://steve.ly/screenshots/theme=dark/travels@480p.webp)](https://steve.ly/screenshots/theme=dark/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/theme=dark/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/theme=dark/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50,theme=dark/travels@480p.webp)](https://steve.ly/screenshots/duration=10s,theme=dark/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,theme=dark/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,theme=dark/travels@480p.webp) | [![Travels](https://steve.ly/screenshots/duration=10s,quality=50,scroll=2026;2025;2024,theme=dark/travels@480p.webp)](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024,theme=dark/travels@480p.mp4) [📄 HTML](https://steve.ly/travels?dark=on) [🎬 MP4](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024,theme=dark/travels@480p.mp4) [🖼️ WebP](https://steve.ly/screenshots/duration=10s,scroll=2026;2025;2024,theme=dark/travels@480p.webp) |
 | --: | --: | --: |
 
 For a video card, add tags like these:
 
 ```html
-<meta property="og:video" content="https://steve.ly/screenshots/color-scheme=dark/travels@480p.mp4">
+<meta property="og:video" content="https://steve.ly/screenshots/theme=dark/travels@480p.mp4">
 <meta property="og:video:width" content="854">
 <meta property="og:video:height" content="480">
 <meta property="og:video:type" content="video/mp4">
