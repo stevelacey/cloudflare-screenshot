@@ -384,11 +384,22 @@ export class Browser {
     try {
       const page = await context.newPage()
 
+      // Only the site itself is sent the Access token, as other hosts like Google Fonts refuse requests carrying it
       if (!external && this.env.CF_ACCESS_CLIENT_ID && this.env.CF_ACCESS_CLIENT_SECRET) {
-        await page.setExtraHTTPHeaders({
-          "CF-Access-Client-Id": this.env.CF_ACCESS_CLIENT_ID,
-          "CF-Access-Client-Secret": this.env.CF_ACCESS_CLIENT_SECRET,
+        const session = await page.createCDPSession()
+        const access = [
+          { name: "CF-Access-Client-Id", value: this.env.CF_ACCESS_CLIENT_ID },
+          { name: "CF-Access-Client-Secret", value: this.env.CF_ACCESS_CLIENT_SECRET },
+        ]
+
+        session.on("Fetch.requestPaused", ({ requestId, request }) => {
+          const headers = [...Object.entries(request.headers).map(([name, value]) => ({ name, value })), ...access]
+
+          // A request can be gone by now, e.g. when the page is closing
+          session.send("Fetch.continueRequest", { requestId, headers }).catch(() => {})
         })
+
+        await session.send("Fetch.enable", { patterns: [{ urlPattern: `${new URL(url).origin}/*` }] })
       }
 
       await page.setViewport({ width, height, deviceScaleFactor: Math.max(zoom, 1) })

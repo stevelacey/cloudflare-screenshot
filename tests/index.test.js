@@ -13,11 +13,10 @@ vi.mock("../src/video.js", () => ({
 }))
 
 function createMockPage() {
-  const session = { send: vi.fn().mockResolvedValue(undefined) }
+  const session = { on: vi.fn(), send: vi.fn().mockResolvedValue(undefined) }
   return {
     session,
     createCDPSession: vi.fn().mockResolvedValue(session),
-    setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
     setViewport: vi.fn().mockResolvedValue(undefined),
     goto: vi.fn().mockResolvedValue({ ok: () => true, status: () => 200 }),
     waitForNetworkIdle: vi.fn().mockResolvedValue(undefined),
@@ -549,7 +548,7 @@ describe("Browser", () => {
       clip: { width: 1280, height: 720, x: 0, y: 0, scale: 1 },
     })
     expect(instance.page.pdf).not.toHaveBeenCalled()
-    expect(instance.page.setExtraHTTPHeaders).not.toHaveBeenCalled()
+    expect(instance.page.session.send).not.toHaveBeenCalledWith("Fetch.enable", expect.anything())
     expect(response.headers.get("Content-Type")).toBe("image/png")
     expect(await response.text()).toBe("png-bytes")
     expect(state.storage.setAlarm).toHaveBeenCalled()
@@ -688,7 +687,7 @@ describe("Browser", () => {
     await browser.fetch({ url: "https://example.com/screenshots/news.example.net/story?id=1" })
 
     expect(instance.page.goto).toHaveBeenCalledWith("https://news.example.net/story?id=1", { waitUntil: "load" })
-    expect(instance.page.setExtraHTTPHeaders).not.toHaveBeenCalled()
+    expect(instance.page.session.send).not.toHaveBeenCalledWith("Fetch.enable", expect.anything())
 
     await browser.fetch({ url: "https://example.com/screenshots/example.org" })
 
@@ -828,15 +827,28 @@ describe("Browser", () => {
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/home", { waitUntil: "load" })
   })
 
-  it("sends CF Access headers when configured", async () => {
+  it("sends CF Access headers to the site only when configured", async () => {
     env.CF_ACCESS_CLIENT_ID = "client-id"
     env.CF_ACCESS_CLIENT_SECRET = "client-secret"
 
     await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
 
-    expect(instance.page.setExtraHTTPHeaders).toHaveBeenCalledWith({
-      "CF-Access-Client-Id": "client-id",
-      "CF-Access-Client-Secret": "client-secret",
+    const { session } = instance.page
+    const [event, paused] = session.on.mock.calls[0]
+
+    expect(event).toBe("Fetch.requestPaused")
+    expect(session.send).toHaveBeenCalledWith("Fetch.enable", { patterns: [{ urlPattern: "https://example.com/*" }] })
+
+    session.send.mockRejectedValueOnce(new Error("Invalid InterceptionId"))
+    paused({ requestId: "1", request: { headers: { Accept: "text/css" } } })
+
+    expect(session.send).toHaveBeenLastCalledWith("Fetch.continueRequest", {
+      requestId: "1",
+      headers: [
+        { name: "Accept", value: "text/css" },
+        { name: "CF-Access-Client-Id", value: "client-id" },
+        { name: "CF-Access-Client-Secret", value: "client-secret" },
+      ],
     })
   })
 
