@@ -13,6 +13,7 @@ const DEFAULT_HEIGHT = 720
 const DEFAULT_QUALITY = 80
 const DEFAULT_SCALE = 1
 const ERROR_TTL = 5 * 60
+const NETWORK_IDLE_TIMEOUT = 5 * 1000
 // Old names for options, still understood
 const ALIASES = { "color-scheme": "theme" }
 const OPTIONS = {
@@ -429,8 +430,12 @@ export class Browser {
       }
 
       // Wait for requests to finish rather than for Chrome to call the page idle, which a busy page like one drawing
-      // WebGL without a GPU never reaches
-      await page.waitForNetworkIdle()
+      // WebGL without a GPU never reaches, and capture anyway if a page keeps polling, e.g. a Turnstile widget
+      await page.waitForNetworkIdle({ timeout: NETWORK_IDLE_TIMEOUT }).catch((error) => {
+        if (error.name !== "TimeoutError") {
+          throw error
+        }
+      })
       await page.evaluate("document.fonts.ready")
 
       if (VIDEO_FORMATS.includes(format)) {

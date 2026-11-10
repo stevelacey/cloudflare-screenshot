@@ -542,7 +542,7 @@ describe("Browser", () => {
       deviceScaleFactor: 1,
     })
     expect(instance.page.goto).toHaveBeenCalledWith("https://example.com/foo/bar", { waitUntil: "load" })
-    expect(instance.page.waitForNetworkIdle).toHaveBeenCalled()
+    expect(instance.page.waitForNetworkIdle).toHaveBeenCalledWith({ timeout: 5000 })
     expect(instance.page.evaluate).toHaveBeenCalledWith("document.fonts.ready")
     expect(instance.page.screenshot).toHaveBeenCalledWith({
       clip: { width: 1280, height: 720, x: 0, y: 0, scale: 1 },
@@ -565,6 +565,26 @@ describe("Browser", () => {
     expect(instance.page.screenshot).not.toHaveBeenCalled()
     expect(instance.context.close).toHaveBeenCalled()
     expect(state.storage.setAlarm).toHaveBeenCalled()
+  })
+
+  it("captures a page that never stops making requests once the wait for it times out", async () => {
+    instance.page.waitForNetworkIdle.mockRejectedValue(Object.assign(new Error("Timed out"), { name: "TimeoutError" }))
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(response.status).toBe(200)
+    expect(instance.page.screenshot).toHaveBeenCalled()
+  })
+
+  it("still fails on other errors while waiting for the page to go quiet", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    instance.page.waitForNetworkIdle.mockRejectedValue(new Error("Target closed"))
+
+    const response = await browser.fetch({ url: "https://example.com/screenshot/foo/bar.png" })
+
+    expect(response.status).toBe(500)
+    expect(instance.page.screenshot).not.toHaveBeenCalled()
+    error.mockRestore()
   })
 
   it("returns a 500 and cleans up when the page fails to load", async () => {
